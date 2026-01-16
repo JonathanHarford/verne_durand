@@ -22,34 +22,58 @@ Ensure dependencies are installed:
 pip install jules-agent-sdk python-dotenv
 ```
 
-## Usage Patterns
+## Attribute Handling (CRITICAL)
 
-### Basic Session Flow
+The SDK returns Pydantic-like models. Use **snake_case** attributes, NOT camelCase or dictionary keys.
 
-Always load environment variables and use the `with` statement for clean resource management.
+- ✅ `session.source_context`
+- ✅ `session.update_time`
+- ✅ `session.state`
+- ❌ `session.sourceContext`
+- ❌ `session.get("state")`
+
+## automationMode Workaround
+
+The high-level `client.sessions.create` method may miss the `automationMode` field. Use the internal client to send a raw request:
 
 ```python
-import os
-from dotenv import load_dotenv
-from jules_agent_sdk import JulesClient
+from jules_agent_sdk.models import Session
 
-load_dotenv()
+data = {
+    "prompt": "Your prompt",
+    "sourceContext": {
+        "source": "sources/github/owner/repo",
+        "githubRepoContext": {"startingBranch": "main"}
+    },
+    "automationMode": "AUTO_CREATE_PR",
+    "title": "Session Title",
+    "requirePlanApproval": True
+}
 
-with JulesClient(api_key=os.environ["JULES_API_KEY"]) as client:
-    # Create session
-    session = client.sessions.create(
-        prompt="Fix the bug in auth.py",
-        source="sources/github/owner/repo",
-        starting_branch="main",
-        require_plan_approval=True
-    )
-    
-    # Wait for completion
-    final_session = client.sessions.wait_for_completion(session.id)
-    print(f"Final state: {final_session.state}")
+# Access the internal client to POST raw JSON
+response = client.sessions.client.post("sessions", json=data)
+session = Session.from_dict(response)
 ```
 
-### Resume Logic
+## Robust Polling (404 Handling)
+
+Backend resources like activities may return transient 404s immediately after session creation. Always wrap polling in a retry loop:
+
+```python
+import time
+from jules_agent_sdk.exceptions import JulesAPIError
+
+try:
+    activities = client.activities.list_all(session_id)
+except JulesAPIError as e:
+    if "404" in str(e):
+        # Ignore transient 404 and continue polling
+        pass
+    else:
+        raise e
+```
+
+## Resume Logic
 
 Before creating a new session, check for active ones to avoid duplicates.
 
@@ -68,29 +92,4 @@ active_sessions = [
 if active_sessions:
     session_id = active_sessions[0].id
     # Resume monitoring...
-```
-
-### Handling Attributes (CRITICAL)
-
-The SDK returns Pydantic-like models. Use **snake_case** attributes, NOT camelCase or dictionary keys.
-
-- ✅ `session.source_context`
-- ✅ `session.update_time`
-- ✅ `session.state`
-- ❌ `session.sourceContext`
-- ❌ `session.get("state")`
-
-## Error Handling
-
-Handle specific Jules exceptions for better resilience:
-
-```python
-from jules_agent_sdk.exceptions import JulesAPIError, JulesAuthenticationError
-
-try:
-    client.sessions.create(...)
-except JulesAuthenticationError:
-    # Fix API key
-except JulesAPIError as e:
-    # Handle API specific errors
 ```

@@ -16,9 +16,10 @@ import sys
 import time
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict, Any
-from jules_agent_sdk import JulesClient
-from jules_agent_sdk.exceptions import JulesAPIError
 from dotenv import load_dotenv
+from jules_agent_sdk import JulesClient
+from jules_agent_sdk.models import Session
+from jules_agent_sdk.exceptions import JulesAPIError
 
 # CONFIGURATION
 DEFAULT_TIMEOUT_SEC = 600
@@ -73,14 +74,9 @@ def ensure_work_branch(target_branch: str) -> None:
     current = get_current_branch()
     if current == target_branch:
         return
-    
-    # Check if branch exists
-    ret = subprocess.run(["git", "show-ref", "--verify", f"refs/heads/{target_branch}"], capture_output=True)
-    if ret.returncode == 0:
-        logging.info(f"[GIT] Switching to existing branch '{target_branch}'")
-        subprocess.run(["git", "checkout", target_branch], check=True)
-    else:
-        logging.info(f"[GIT] Creating and switching to branch '{target_branch}'")
+    logging.info(f"[GIT] Switching to '{target_branch}'")
+    ret = subprocess.run(["git", "checkout", target_branch], capture_output=True)
+    if ret.returncode != 0:
         subprocess.run(["git", "checkout", "-b", target_branch], check=True)
 
 def push_changes(branch: str) -> None:
@@ -133,7 +129,15 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
         last_act_count = 0
         
         while (time.time() - start_time) < timeout:
-            session = client.sessions.get(session_name)
+            try:
+                session = client.sessions.get(session_name)
+            except JulesAPIError as e:
+                if "404" in str(e):
+                    logging.debug(f"Session {session_name} not found yet (transient 404). Retrying...")
+                    time.sleep(2)
+                    continue
+                raise e
+
             state = getattr(session, "state", "STATE_UNSPECIFIED")
             
             if state == "COMPLETED":
@@ -177,22 +181,10 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
     If automationMode was AUTO_CREATE_PR, we fetch the branch.
     """
     outputs = getattr(session, "outputs", [])
-    # Outputs are usually objects or dicts depending on the model
-    # Based on inspection, it seems they might be models or dicts within the list
-    pr_data = None
-    for o in outputs:
-        # Check if it's an object or dict
-        if isinstance(o, dict):
-            if "pullRequest" in o:
-                pr_data = o.get("pullRequest")
-                break
-        else:
-            if hasattr(o, "pull_request") and o.pull_request:
-                pr_data = o.pull_request
-                break
-            elif hasattr(o, "pullRequest") and o.pullRequest:
-                pr_data = o.pullRequest
-                break
+    pr_data = next((o.pull_request for o in outputs if hasattr(o, "pull_request") and o.pull_request), None)
+    if not pr_data:
+        # Fallback if it's still a dict
+        pr_data = next((o.get("pullRequest") or o.get("pull_request") for o in outputs if isinstance(o, dict)), None)
     
     if not pr_data:
         logging.error("No Pull Request output found in session. Cannot apply changes automatically yet.")
@@ -248,11 +240,7 @@ def run_jules_task(
     sessions = session_list_resp.get("sessions", [])
     
     # Filter by repo AND recency to avoid re-joining stalled sessions
-    # Using snake_case attributes: source_context.source, state, update_time
-    repo_sessions = [
-        s for s in sessions 
-        if s.source_context and repo_slug in (s.source_context.source or "")
-    ]
+    repo_sessions = [s for s in sessions if s.source_context and repo_slug in s.source_context.source]
     active_sessions = [
         s for s in repo_sessions 
         if s.state not in ["COMPLETED", "FAILED"] 
@@ -273,13 +261,22 @@ def run_jules_task(
         )
         
         logging.info(f"Starting new Jules session for: '{task}'")
-        session = client.sessions.create(
-            prompt=full_prompt,
-            source=f"sources/github/{repo_slug}",
-            starting_branch=work_branch,
-            title=f"Ralph Task: {task[:30]}...",
-            require_plan_approval=True
-        )
+        # Use raw POST to support automationMode which is missing in high-level SDK
+        data = {
+            "prompt": full_prompt,
+            "sourceContext": {
+                "source": f"sources/github/{repo_slug}",
+                "githubRepoContext": {"startingBranch": work_branch}
+            },
+            "automationMode": "AUTO_CREATE_PR",
+            "title": f"Ralph Task: {task[:30]}...",
+            "requirePlanApproval": True
+        }
+        
+        # client.sessions.client is the internal JulesAPI object
+        response = client.sessions.client.post("sessions", json=data)
+        session = Session.from_dict(response)
+        
         session_name = session.name
         logging.info(f"Session started: {session_name}")
 
@@ -325,8 +322,8 @@ def main() -> None:
 
     args = parser.parse_args()
     configure_logging(verbose=args.verbose)
-
     load_dotenv()
+
     api_key = os.environ.get("JULES_API_KEY")
     if not api_key:
         logging.error("JULES_API_KEY environment variable is missing.")

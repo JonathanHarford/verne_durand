@@ -2,7 +2,6 @@
 # /// script
 # dependencies = [
 #   "jules-agent-sdk",
-#   "python-dotenv",
 # ]
 # ///
 
@@ -14,7 +13,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from jules_agent_sdk import JulesClient
 from jules_agent_sdk.exceptions import JulesAPIError
-from dotenv import load_dotenv
 
 def format_timestamp(ts: Optional[str]) -> str:
     if not ts:
@@ -90,18 +88,18 @@ def print_session_report(client: JulesClient, session_id: str):
         print_section("BASIC INFORMATION")
         print_field("Session ID", getattr(session, "id", "N/A"))
         print_field("State", getattr(session, "state", "N/A"))
-        print_field("Created", format_timestamp(getattr(session, "create_time", None)))
-        print_field("Updated", format_timestamp(getattr(session, "update_time", None)))
+        print_field("Created", format_timestamp(getattr(session, "createTime", None)))
+        print_field("Updated", format_timestamp(getattr(session, "updateTime", None)))
         print_field("URL", getattr(session, "url", "N/A"))
 
         # Source Context
-        source_context = getattr(session, "source_context", None)
+        source_context = getattr(session, "sourceContext", {})
         if source_context:
             print_section("SOURCE CONTEXT")
-            print_field("Source", getattr(source_context, "source", "N/A"))
-            github_ctx = getattr(source_context, "github_repo_context", None)
+            print_field("Source", source_context.get("source", "N/A"))
+            github_ctx = source_context.get("githubRepoContext", {})
             if github_ctx:
-                print_field("Starting Branch", getattr(github_ctx, "starting_branch", "N/A"))
+                print_field("Starting Branch", github_ctx.get("startingBranch", "N/A"))
 
         # Initial Prompt
         prompt = getattr(session, "prompt", None)
@@ -115,21 +113,10 @@ def print_session_report(client: JulesClient, session_id: str):
         if outputs:
             print_section("OUTPUTS")
             for output in outputs:
-                # Determine if output is dict or object
-                pr = None
-                if isinstance(output, dict):
-                    pr = output.get("pullRequest")
-                else:
-                    pr = getattr(output, "pull_request", getattr(output, "pullRequest", None))
-                
+                pr = output.get("pullRequest")
                 if pr:
-                    if isinstance(pr, dict):
-                        print_field("Pull Request URL", pr.get("url", "N/A"))
-                        desc = pr.get("description")
-                    else:
-                        print_field("Pull Request URL", getattr(pr, "url", "N/A"))
-                        desc = getattr(pr, "description", None)
-                    
+                    print_field("Pull Request URL", pr.get("url", "N/A"))
+                    desc = pr.get("description")
                     if desc:
                         print("\n  PR Description:")
                         for line in wrap_text(desc, 73):
@@ -150,23 +137,17 @@ def print_session_report(client: JulesClient, session_id: str):
                 
                 # Format type for display
                 display_type = act_type.replace("([A-Z])", " $1").capitalize()
-                timestamp = format_timestamp(act_data.get("create_time") if isinstance(act_data, dict) else getattr(act, "create_time", None))
+                timestamp = format_timestamp(act_data.get("createTime"))
                 
                 print(f"  [{timestamp}] {display_type}")
                 
                 details = None
-                if act_type == "progressUpdated" or act_type == "progress_updated":
-                    prog = act_data.get("progress_updated") if isinstance(act_data, dict) else getattr(act, "progress_updated", None)
-                    if prog:
-                        details = (prog.get("description") or prog.get("title")) if isinstance(prog, dict) else (getattr(prog, "description", None) or getattr(prog, "title", None))
-                elif act_type == "agentMessaged" or act_type == "agent_messaged":
-                    msg = act_data.get("agent_messaged") if isinstance(act_data, dict) else getattr(act, "agent_messaged", None)
-                    if msg:
-                        details = msg.get("agent_message") if isinstance(msg, dict) else getattr(msg, "agent_message", None)
-                elif act_type == "userMessaged" or act_type == "user_messaged":
-                    msg = act_data.get("user_messaged") if isinstance(act_data, dict) else getattr(act, "user_messaged", None)
-                    if msg:
-                        details = msg.get("user_message") if isinstance(msg, dict) else getattr(msg, "user_message", None)
+                if act_type == "progressUpdated":
+                    details = act_data.get("progressUpdated", {}).get("description") or act_data.get("progressUpdated", {}).get("title")
+                elif act_type == "agentMessaged":
+                    details = act_data.get("agentMessaged", {}).get("agentMessage")
+                elif act_type == "userMessaged":
+                    details = act_data.get("userMessaged", {}).get("userMessage")
                 
                 if details:
                     preview = (details[:97] + "...") if len(details) > 100 else details
@@ -185,7 +166,6 @@ def main():
     
     args = parser.parse_args()
     
-    load_dotenv()
     api_key = os.environ.get("JULES_API_KEY")
     if not api_key:
         print("Error: JULES_API_KEY environment variable is missing.")
