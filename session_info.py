@@ -13,6 +13,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from jules_agent_sdk import JulesClient
 from jules_agent_sdk.exceptions import JulesAPIError
+import jules_sdk_patch
+jules_sdk_patch.apply_patch()
 
 def format_timestamp(ts: Optional[str]) -> str:
     if not ts:
