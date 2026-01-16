@@ -1,49 +1,39 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import time
 from datetime import datetime
+from typing import List, Optional, Set, Tuple
 
 
 # CONFIGURATION
-JULES_BIN = "jules"  # Assumes 'jules' is in your PATH
-JULES_API_KEY = "9642c385554e5a1931f1eafc6db4eeba8a2f94ab"   # OPTIONAL (DO NOT COMMIT)
+JULES_BIN = "jules"  # Can be overridden by --jules-bin
 DEFAULT_TIMEOUT_SEC = 600
 MAX_RETRIES = 3
 
 
-class Colors:
-    HEADER = "\033[95m"
-    OKBLUE = "\033[94m"
-    OKGREEN = "\033[92m"
-    WARNING = "\033[93m"
-    FAIL = "\033[91m"
-    ENDC = "\033[0m"
-
-
-def log(message, level="INFO"):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    color = Colors.OKBLUE
-    if level == "SUCCESS":
-        color = Colors.OKGREEN
-    elif level == "WARNING":
-        color = Colors.WARNING
-    elif level == "ERROR":
-        color = Colors.FAIL
-    elif level == "GIT":
-        color = Colors.HEADER
-
-    print(f"{color}[{timestamp}] [{level}] {message}{Colors.ENDC}")
+def configure_logging(verbose: bool = False) -> None:
+    """Configures the logging module."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="[%(asctime)s] [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr
+    )
 
 
 # --- GIT HELPERS ---
 
 
-def get_current_branch():
+def get_current_branch() -> Optional[str]:
+    """Returns the name of the current git branch, or None if failed."""
     result = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True
     )
@@ -52,30 +42,47 @@ def get_current_branch():
     return result.stdout.strip()
 
 
-def run_git_cmd(args, check=True):
+def run_git_cmd(args: List[str], check: bool = True) -> subprocess.CompletedProcess:
+    """Runs a git command with the given arguments."""
     return subprocess.run(
         ["git"] + args, check=check, capture_output=True, text=True
     )
 
-def ensure_repo_initialized():
+
+def ensure_git_repo() -> None:
+    """
+    Verifies that the current directory is a git repository.
+    Exits if it is not.
+    """
+    ret = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"], capture_output=True
+    )
+    if ret.returncode != 0:
+        logging.error("Current directory is not a git repository.")
+        sys.exit(1)
+
+
+def ensure_repo_initialized() -> None:
     """
     Ensures the repo has at least one commit so branches can extend from it.
     """
+    ensure_git_repo()
+
     ret = subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True
     )
     if ret.returncode != 0:
-        log("Repository has no commits. Creating initial empty commit.", "GIT")
+        logging.info("[GIT] Repository has no commits. Creating initial empty commit.")
         try:
             # Check if user needs to set identity, though usually global config handles this.
             # We'll just try to commit.
             subprocess.run(["git", "commit", "--allow-empty", "-m", "Initial commit"], check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
-            log(f"Failed to create initial commit: {e}", "ERROR")
+            logging.error(f"Failed to create initial commit: {e}")
             sys.exit(1)
 
 
-def ensure_work_branch(target_branch):
+def ensure_work_branch(target_branch: str) -> None:
     """
     Switches to the target branch, creating it if it doesn't exist.
     """
@@ -85,14 +92,14 @@ def ensure_work_branch(target_branch):
     if current == target_branch:
         return
 
-    log(f"Switching to work branch: '{target_branch}'", "GIT")
+    logging.info(f"[GIT] Switching to work branch: '{target_branch}'")
 
     # Try checking out existing branch
     ret = subprocess.run(["git", "checkout", target_branch], capture_output=True)
 
     if ret.returncode != 0:
         # If failure, assume it doesn't exist and create it
-        log(f"Branch '{target_branch}' not found. Creating it.", "GIT")
+        logging.info(f"[GIT] Branch '{target_branch}' not found. Creating it.")
         try:
             subprocess.run(
                 ["git", "checkout", "-b", target_branch],
@@ -100,34 +107,27 @@ def ensure_work_branch(target_branch):
                 stdout=subprocess.DEVNULL,
             )
         except subprocess.CalledProcessError:
-            log(
-                f"Failed to create branch '{target_branch}'. Is this a git repo?",
-                "ERROR",
-            )
+            logging.error(f"Failed to create branch '{target_branch}'. Is this a git repo?")
             sys.exit(1)
 
 
-def commit_changes(branch, message):
+def push_changes(branch: str) -> None:
+    """Pushes the branch to origin if it exists."""
     try:
-        run_git_cmd(["add", "."])
-        # Allow empty commits
-        run_git_cmd(["commit", "--allow-empty", "-m", message])
-        log(f"Committed changes: {message}", "GIT")
-        
         # Push to origin if remote exists
         ret = run_git_cmd(["remote"], check=False)
         if "origin" in ret.stdout:
-            log(f"Pushing '{branch}' to origin...", "GIT")
+            logging.info(f"[GIT] Pushing '{branch}' to origin...")
             # Set upstream if needed
             run_git_cmd(["push", "-u", "origin", branch])
         else:
-            log("No 'origin' remote found. Skipping push.", "WARNING")
+            logging.warning("No 'origin' remote found. Skipping push.")
             
     except subprocess.CalledProcessError as e:
-        log(f"Failed to commit/push changes: {e.stderr}", "ERROR")
+        logging.error(f"Failed to push changes: {e.stderr}")
 
 
-def get_repo_slug():
+def get_repo_slug() -> Optional[str]:
     """
     Attempts to extract 'owner/repo' from the git remote.
     """
@@ -150,7 +150,7 @@ def get_repo_slug():
 
 # --- JULES INTERACTION ---
 
-def get_active_sessions(repo_filter=None):
+def get_active_sessions(repo_filter: Optional[str] = None) -> Set[str]:
     """
     Returns a set of active session IDs.
     """
@@ -161,7 +161,7 @@ def get_active_sessions(repo_filter=None):
     ret = subprocess.run(cmd, capture_output=True, text=True)
     
     if ret.returncode != 0:
-        log(f"Failed to list sessions: {ret.stderr}", "ERROR")
+        logging.error(f"Failed to list sessions: {ret.stderr}")
         return set()
 
     sessions = set()
@@ -177,21 +177,21 @@ def get_active_sessions(repo_filter=None):
     return sessions
 
 
-def wait_for_session(session_id, timeout):
+def wait_for_session(session_id: str, timeout: int) -> Tuple[bool, str]:
     """
     Polls session status until completion or timeout.
     Returns: (success: bool, status: str)
     """
     start_time = time.time()
     
-    log(f"Waiting for session {session_id}...", "INFO")
+    logging.info(f"Waiting for session {session_id}...")
     
     while (time.time() - start_time) < timeout:
         cmd = [JULES_BIN, "remote", "list", "--session"]
         ret = subprocess.run(cmd, capture_output=True, text=True)
         
         if ret.returncode != 0:
-            log("Error polling session list. Retrying...", "WARNING")
+            logging.warning("Error polling session list. Retrying...")
             time.sleep(5)
             continue
             
@@ -215,7 +215,14 @@ def wait_for_session(session_id, timeout):
     return False, "TIMEOUT"
 
 
-def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_session_id=None):
+def run_jules_task(
+    task: str,
+    project_path: str,
+    timeout: int,
+    work_branch: str,
+    plan_path: str,
+    resume_session_id: Optional[str] = None
+) -> Tuple[bool, str]:
     """
     Runs a Jules task using the async workflow:
     1. Snapshot sessions
@@ -234,7 +241,13 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
 
         # 2. Start Session (ensure repo is pushed first so Jules sees the latest)
         # We already push at the end of the previous task, but let's be sure.
-        log(f"Spawning Jules for task: '{task}'", "SYSTEM")
+        logging.info(f"Spawning Jules for task: '{task}'")
+
+        # Sync to remote if available
+        ret = run_git_cmd(["remote"], check=False)
+        if "origin" in ret.stdout:
+             logging.info(f"[GIT] Syncing '{work_branch}' to origin before starting Jules...")
+             run_git_cmd(["push", "origin", work_branch], check=False)
 
         # Instruction for Jules to mark the task completed in the plan file
         full_prompt = (
@@ -251,11 +264,11 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
         # Check for known error patterns even if returncode is 0
         if "Error:" in ret.stdout or "Error:" in ret.stderr:
             err_msg = ret.stderr if ret.stderr else ret.stdout
-            log(f"Jules reported an error: {err_msg.strip()}", "ERROR")
+            logging.error(f"Jules reported an error: {err_msg.strip()}")
             return False, "JULES_ERROR"
 
         if ret.returncode != 0:
-            log(f"Failed to start Jules session (Exit {ret.returncode}): {ret.stderr}", "ERROR")
+            logging.error(f"Failed to start Jules session (Exit {ret.returncode}): {ret.stderr}")
             return False, ret.stderr
 
         # 3. Identify ID
@@ -266,34 +279,39 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
             session_id = diff.pop()
         elif len(diff) > 1:
             # Ambiguous, try to find the one that matches our anticipated latest one?
-            match = re.search(r"(?:Session ID:|session)\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
+            match = re.search(r"(?:Session ID:|session|id)\s*[:=]?\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
             if match:
                 session_id = match.group(1)
             else:
                 session_id = list(diff)[0]
-                log(f"Warning: Multiple new sessions found, picking {session_id}", "WARNING")
+                logging.warning(f"Multiple new sessions found, picking {session_id}")
         else:
             # Fallback to parsing stdout/stderr
-            # Pattern covers "Session ID: 123", "Created session 123", etc.
-            match = re.search(r"(?:Session ID:|session)\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
+            # Pattern covers "Session ID: 123", "Created session 123", "ID: 123", etc.
+            match = re.search(r"(?:Session ID:|session|id)\s*[:=]?\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
             if match:
                 session_id = match.group(1)
             else:
                 # Maybe it's just a raw alphanumeric string on a line?
+                # Exclude common status words that might appear alone
+                ignored_words = {"error", "warning", "success", "failed", "done", "completed"}
+
                 for line in (ret.stdout + ret.stderr).splitlines():
-                    if re.match(r"^[a-zA-Z0-9_-]+$", line.strip()):
-                        session_id = line.strip()
-                        break
+                    stripped = line.strip()
+                    if re.match(r"^[a-zA-Z0-9_-]+$", stripped):
+                        if stripped.lower() not in ignored_words:
+                            session_id = stripped
+                            break
 
                 if not session_id:
-                    log("Could not identify new Session ID.", "ERROR")
-                    log(f"STDOUT: {ret.stdout}", "DEBUG")
-                    log(f"STDERR: {ret.stderr}", "DEBUG")
+                    logging.error("Could not identify new Session ID.")
+                    logging.debug(f"STDOUT: {ret.stdout}")
+                    logging.debug(f"STDERR: {ret.stderr}")
                     return False, "NO_ID"
 
-        log(f"Session started: {session_id}", "INFO")
+        logging.info(f"Session started: {session_id}")
     else:
-        log(f"Resuming existing session: {session_id}", "INFO")
+        logging.info(f"Resuming existing session: {session_id}")
 
     # 4. Wait
     success, status = wait_for_session(session_id, timeout)
@@ -311,7 +329,7 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
     # e) Delete temporary branch.
     
     temp_branch = f"jules-task-{session_id}"
-    log(f"Applying changes via temporary branch '{temp_branch}'...", "GIT")
+    logging.info(f"[GIT] Applying changes via temporary branch '{temp_branch}'...")
     
     try:
         # Create and switch to temp branch
@@ -321,7 +339,7 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
         pull_cmd = [JULES_BIN, "remote", "pull", "--session", session_id, "--apply"]
         pull_ret = subprocess.run(pull_cmd, capture_output=True, text=True)
         if pull_ret.returncode != 0:
-            log(f"Failed to pull changes: {pull_ret.stderr}", "ERROR")
+            logging.error(f"Failed to pull changes: {pull_ret.stderr}")
             # Don't fail the whole script yet, try to recover
             run_git_cmd(["checkout", work_branch])
             run_git_cmd(["branch", "-D", temp_branch])
@@ -333,15 +351,15 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
         
         # Merge into work_branch
         run_git_cmd(["checkout", work_branch])
-        log(f"Merging '{temp_branch}' into '{work_branch}'...", "GIT")
+        logging.info(f"[GIT] Merging '{temp_branch}' into '{work_branch}'...")
         run_git_cmd(["merge", temp_branch])
         
         # Delete temp branch
-        log(f"Deleting auxiliary branch '{temp_branch}'.", "GIT")
+        logging.info(f"[GIT] Deleting auxiliary branch '{temp_branch}'.")
         run_git_cmd(["branch", "-D", temp_branch])
         
     except subprocess.CalledProcessError as e:
-        log(f"Git error during merge/delete: {e.stderr}", "ERROR")
+        logging.error(f"Git error during merge/delete: {e.stderr}")
         # Try to return to safety
         subprocess.run(["git", "checkout", work_branch], capture_output=True)
         return False, f"GIT_ERROR: {e.stderr[:100]}"
@@ -352,10 +370,23 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
 # --- CORE LOGIC ---
 
 
-def parse_plan(plan_path):
+def check_prerequisites() -> None:
+    """
+    Checks if necessary tools are installed.
+    """
+    if not shutil.which("git"):
+        logging.error("Git is not installed or not in PATH.")
+        sys.exit(1)
+
+    if not shutil.which(JULES_BIN):
+        logging.error(f"Jules binary '{JULES_BIN}' not found. Please install it or set --jules-bin.")
+        sys.exit(1)
+
+
+def parse_plan(plan_path: str) -> Tuple[List[Tuple[int, str]], int]:
     # This runs AFTER os.chdir, so paths are relative to the project root
     if not os.path.exists(plan_path):
-        log(f"Plan file not found at: {os.path.abspath(plan_path)}", "ERROR")
+        logging.error(f"Plan file not found at: {os.path.abspath(plan_path)}")
         sys.exit(1)
 
     with open(plan_path, "r") as f:
@@ -376,7 +407,7 @@ def parse_plan(plan_path):
     return pending_tasks, all_task_count
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Ralph Wiggum: Autonomous Jules Harness"
     )
@@ -395,27 +426,46 @@ def main():
         default=DEFAULT_TIMEOUT_SEC,
         help="Task timeout in seconds",
     )
+    parser.add_argument(
+        "--jules-bin",
+        default="jules",
+        help="Path to the jules executable (default: jules)",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose logging",
+    )
 
     args = parser.parse_args()
 
+    # Setup logging based on verbosity
+    configure_logging(verbose=args.verbose)
+
+    # Global Configuration Override
+    global JULES_BIN
+    JULES_BIN = args.jules_bin
+
     # 1. API Key Check
-    if JULES_API_KEY:
-        os.environ["JULES_API_KEY"] = JULES_API_KEY
-    
     if not os.environ.get("JULES_API_KEY"):
-        log("Environment variable 'JULES_API_KEY' is missing.", "ERROR")
-        print("Tip: You can set it into the JULES_API_KEY variable at the top of this script.")
+        logging.error("Environment variable 'JULES_API_KEY' is missing.")
+        logging.info("Please set JULES_API_KEY before running this script.")
+        # Proceeding might be okay if user relies on gcloud auth, but typically API key is needed.
+        # Original script exited, so we exit too.
         sys.exit(1)
+
+    # Check tools
+    check_prerequisites()
 
     # 2. Switch Context (Project Root)
     abs_project_path = os.path.abspath(args.project)
 
     if not os.path.exists(abs_project_path):
-        log(f"Project path does not exist: {abs_project_path}", "ERROR")
+        logging.error(f"Project path does not exist: {abs_project_path}")
         sys.exit(1)
 
     os.chdir(abs_project_path)
-    log(f"Working directory set to: {os.getcwd()}", "INFO")
+    logging.info(f"Working directory set to: {os.getcwd()}")
 
     # 3. Initialize Branch
     try:
@@ -423,10 +473,10 @@ def main():
         # Push initial state if remote exists
         ret = run_git_cmd(["remote"], check=False)
         if "origin" in ret.stdout:
-            log(f"Pushing initial state of '{args.branch}' to origin...", "GIT")
+            logging.info(f"[GIT] Pushing initial state of '{args.branch}' to origin...")
             run_git_cmd(["push", "-u", "origin", args.branch], check=False)
     except subprocess.CalledProcessError as e:
-        log(f"Failed to initialize Git branch: {e}", "ERROR")
+        logging.error(f"Failed to initialize Git branch: {e}")
         sys.exit(1)
 
     # 4. Parse Plan
@@ -434,10 +484,10 @@ def main():
     tasks, total_count = parse_plan(args.plan)
 
     if not tasks:
-        log("No unchecked tasks found.", "SUCCESS")
+        logging.info("No unchecked tasks found.")
         sys.exit(0)
 
-    log(f"Found {len(tasks)} pending tasks out of {total_count} total.", "INFO")
+    logging.info(f"Found {len(tasks)} pending tasks out of {total_count} total.")
 
     repo_id = get_repo_slug() or os.path.abspath(args.project)
 
@@ -446,13 +496,13 @@ def main():
     if existing_sessions:
         resume_session_id = list(existing_sessions)[0]
         if len(existing_sessions) > 1:
-            log(f"Warning: Multiple active sessions found. Picking {resume_session_id} to resume.", "WARNING")
+            logging.warning(f"Multiple active sessions found. Picking {resume_session_id} to resume.")
         else:
-            log(f"Found active session {resume_session_id}. Resuming...", "INFO")
+            logging.info(f"Found active session {resume_session_id}. Resuming...")
 
     # 5. Execution Loop
     for i, (abs_idx, task) in enumerate(tasks):
-        log(f"Starting Task {abs_idx}/{total_count}: {task}", "SYSTEM")
+        logging.info(f"Starting Task {abs_idx}/{total_count}: {task}")
 
         attempts = 0
         success = False
@@ -472,26 +522,23 @@ def main():
 
             if task_success:
                 # Local checkbox logic removed - Jules handles it now
-                commit_changes(args.branch, f"Jules Task: {task}")
+                push_changes(args.branch)
                 success = True
-                log(f"Task completed successfully.", "SUCCESS")
+                logging.info(f"Task completed successfully.")
             else:
                 if status == "JULES_ERROR":
-                    log("Aborting due to fatal Jules error.", "ERROR")
+                    logging.error("Aborting due to fatal Jules error.")
                     sys.exit(1)
                 
-                log(
-                    f"Task failed (Attempt {attempts}). Reason: {status}",
-                    "WARNING",
-                )
+                logging.warning(f"Task failed (Attempt {attempts}). Reason: {status}")
                 if attempts < MAX_RETRIES:
                     time.sleep(5)
 
         if not success:
-            log(f"CRITICAL FAILURE: Task '{task}' failed {MAX_RETRIES} times.", "ERROR")
+            logging.error(f"CRITICAL FAILURE: Task '{task}' failed {MAX_RETRIES} times.")
             sys.exit(1)
 
-    log("All tasks in plan completed.", "SUCCESS")
+    logging.info("All tasks in plan completed.")
 
 
 if __name__ == "__main__":
