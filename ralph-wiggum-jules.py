@@ -2,6 +2,7 @@
 # /// script
 # dependencies = [
 #   "httpx",
+#   "jules-agent-sdk",
 # ]
 # ///
 
@@ -9,73 +10,18 @@ import argparse
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
-from typing import List, Optional, Set, Tuple, Dict, Any
-import httpx
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple, Dict, Any
+from jules_agent_sdk import JulesClient
+from jules_agent_sdk.exceptions import JulesAPIError
 
 # CONFIGURATION
 DEFAULT_TIMEOUT_SEC = 600
 MAX_RETRIES = 3
 STALE_THRESHOLD_SEC = 1200 # 20 minutes
-API_BASE_URL = "https://jules.googleapis.com/v1alpha"
-
-class JulesAPI:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.client = httpx.Client(timeout=30.0)
-
-    def _request(self, method: str, path: str, json_data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict:
-        url = f"{API_BASE_URL}/{path}"
-        if params is None:
-            params = {}
-        params["key"] = self.api_key
-        
-        resp = self.client.request(method, url, json=json_data, params=params)
-        if resp.status_code >= 400:
-            logging.error(f"API Error ({resp.status_code}): {resp.text}")
-            resp.raise_for_status()
-        return resp.json()
-
-    def list_sessions(self, repo_filter: Optional[str] = None) -> List[Dict]:
-        # The API doesn't seem to have a direct repo filter in the list sessions call in the docs,
-        # but jules_mgr.bb shows it uses page size and then filters manually.
-        data = self._request("GET", "sessions", params={"pageSize": 100})
-        sessions = data.get("sessions", [])
-        if repo_filter:
-            # Match repo slug in sourceContext.source
-            sessions = [s for s in sessions if repo_filter in s.get("sourceContext", {}).get("source", "")]
-        return sessions
-
-    def get_session(self, session_id: str) -> Dict:
-        # Check if session_id is a full name like "sessions/123" or just "123"
-        path = session_id if "/" in session_id else f"sessions/{session_id}"
-        return self._request("GET", path)
-
-    def create_session(self, prompt: str, repo: str, branch: str, title: Optional[str] = None) -> Dict:
-        payload = {
-            "prompt": prompt,
-            "sourceContext": {
-                "source": f"sources/github/{repo}",
-                "githubRepoContext": {
-                    "startingBranch": branch
-                }
-            },
-            "automationMode": "AUTO_CREATE_PR", # Standard way to get changes back via API
-            "title": title or f"Ralph Task: {prompt[:30]}..."
-        }
-        return self._request("POST", "sessions", json_data=payload)
-
-    def list_activities(self, session_id: str) -> List[Dict]:
-        path = session_id if "/" in session_id else f"sessions/{session_id}"
-        data = self._request("GET", f"{path}/activities", params={"pageSize": 100})
-        return data.get("activities", [])
-
-    def delete_session(self, session_id: str) -> Dict:
-        path = session_id if "/" in session_id else f"sessions/{session_id}"
-        return self._request("DELETE", path)
 
 def configure_logging(verbose: bool = False) -> None:
     """Configures the logging module."""
@@ -151,77 +97,95 @@ def get_repo_slug() -> Optional[str]:
     except Exception: pass
     return None
 
+# --- UTILS ---
+
+def parse_api_timestamp(ts: str) -> datetime:
+    """Parses RFC 3339 timestamp from API."""
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+def is_recent(ts_str: Optional[str], threshold_sec: int) -> bool:
+    """Checks if a timestamp string is within the threshold from now."""
+    if not ts_str:
+        return False
+    try:
+        ts = parse_api_timestamp(ts_str)
+        now = datetime.now(timezone.utc)
+        return (now - ts).total_seconds() < threshold_sec
+    except Exception:
+        return False
+
 # --- JULES INTERACTION ---
 
-def wait_for_session(api: JulesAPI, session_id: str, timeout: int) -> Tuple[bool, str, Optional[Dict]]:
+def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tuple[bool, str, Optional[Any]]:
     """Polls session status until completion or timeout."""
-    start_time = time.time()
-    last_act_time = time.time()
-    last_act_count = 0
+    logging.info(f"Waiting for session {session_name}...")
     
-    logging.info(f"Waiting for session {session_id}...")
-    
-    while (time.time() - start_time) < timeout:
-        try:
-            session = api.get_session(session_id)
-            state = session.get("state", "UNKNOWN")
+    try:
+        start_time = time.time()
+        last_act_time = time.time()
+        last_act_count = 0
+        
+        while (time.time() - start_time) < timeout:
+            session = client.sessions.get(session_name)
+            state = getattr(session, "state", "STATE_UNSPECIFIED")
             
-            if state in ["COMPLETED", "SUCCEEDED"]:
+            if state == "COMPLETED":
                 return True, "COMPLETED", session
-            if state in ["FAILED", "CANCELLED", "ERROR"]:
-                return False, state, session
+            if state == "FAILED":
+                return False, "FAILED", session
             
-            # Stale check
-            activities = api.list_activities(session_id)
+            if state == "AWAITING_PLAN_APPROVAL":
+                logging.info(f"Session {session_name} awaiting plan approval. Approving...")
+                client.sessions.approve_plan(session_name)
+            
+            # Stale check via activity count
+            activities = client.activities.list_all(session_name)
             if len(activities) > last_act_count:
                 last_act_count = len(activities)
                 last_act_time = time.time()
-                logging.debug(f"New activity detected. Count: {last_act_count}")
+                logging.debug(f"New activity detected. Total: {last_act_count}")
             elif (time.time() - last_act_time) > STALE_THRESHOLD_SEC:
-                logging.warning(f"Session {session_id} has been stale for > {STALE_THRESHOLD_SEC}s. Cancelling.")
-                api.delete_session(session_id)
+                logging.warning(f"Session {session_name} has been stale for > {STALE_THRESHOLD_SEC}s. Giving up.")
                 return False, "STALE", None
 
-            # Progress update?
-            logging.debug(f"Session {session_id} state: {state}")
             time.sleep(10)
-        except Exception as e:
-            logging.warning(f"Error polling session: {e}")
-            time.sleep(5)
+    except JulesAPIError as e:
+        logging.error(f"SDK Error: {e}")
+        return False, "ERROR", None
+    except Exception as e:
+        logging.warning(f"Error polling session: {e}")
 
     return False, "TIMEOUT", None
 
-def apply_jules_changes(session: Dict, work_branch: str) -> bool:
+def apply_jules_changes(session: Any, work_branch: str) -> bool:
     """
     Applies the changes from Jules. 
     If automationMode was AUTO_CREATE_PR, we fetch the branch.
-    Otherwise, we'd have to parse patches (not yet implemented).
     """
-    outputs = session.get("outputs", [])
+    outputs = getattr(session, "outputs", [])
     pr_data = next((o.get("pullRequest") for o in outputs if "pullRequest" in o), None)
     
     if not pr_data:
         logging.error("No Pull Request output found in session. Cannot apply changes automatically yet.")
         return False
 
-    pr_url = pr_data.get("url", "")
-    # PR URL format is usually https://github.com/owner/repo/pull/123
-    # We need the branch name. Sometimes it's in the description or we can fetch the PR ref.
+    # Pull Request URL format is usually https://github.com/owner/repo/pull/123
     # Standard Jules behavior for AUTO_CREATE_PR is to push to a branch named like 'jules-session-ID'
-    session_id = session.get("id")
-    # Try to find branch name in description or assume standard format
+    session_id = getattr(session, "id", None)
+    if not session_id:
+        # Try to extract from name if id is missing
+        name = getattr(session, "name", "")
+        session_id = name.split("/")[-1] if "/" in name else name
+
     jules_branch = f"jules-{session_id}"
     
     logging.info(f"[GIT] Fetching changes from Jules branch '{jules_branch}'...")
     try:
-        # Fetch all branches from origin
         run_git_cmd(["fetch", "origin"])
         
-        # Check if jules_branch exists on remote
         ret = run_git_cmd(["branch", "-r"], check=False)
         remote_branch = f"origin/{jules_branch}"
         if remote_branch not in ret.stdout:
-            # Maybe a different naming scheme? Let's check branches containing the session ID
             match = re.search(f"origin/(.*{session_id}.*)", ret.stdout)
             if match:
                 remote_branch = match.group(0).strip()
@@ -230,7 +194,6 @@ def apply_jules_changes(session: Dict, work_branch: str) -> bool:
                 logging.error(f"Could not find remote branch for session {session_id}")
                 return False
 
-        # Merge remote branch into current work_branch
         logging.info(f"[GIT] Merging {remote_branch} into {work_branch}...")
         run_git_cmd(["merge", "--no-edit", remote_branch])
         return True
@@ -239,7 +202,7 @@ def apply_jules_changes(session: Dict, work_branch: str) -> bool:
         return False
 
 def run_jules_task(
-    api: JulesAPI,
+    client: JulesClient,
     task: str,
     project_path: str,
     timeout: int,
@@ -252,16 +215,23 @@ def run_jules_task(
         return False, "NO_REPO_SLUG"
 
     # 1. Check for existing active sessions (Resume logic)
-    sessions = api.list_sessions(repo_filter=repo_slug)
-    active_sessions = [s for s in sessions if s.get("state") not in ["COMPLETED", "FAILED", "CANCELLED", "ERROR"]]
+    session_list_resp = client.sessions.list(page_size=100)
+    sessions = session_list_resp.get("sessions", [])
     
-    session_id = None
+    # Filter by repo AND recency to avoid re-joining stalled sessions
+    repo_sessions = [s for s in sessions if repo_slug in s.get("sourceContext", {}).get("source", "")]
+    active_sessions = [
+        s for s in repo_sessions 
+        if s.get("state") not in ["COMPLETED", "FAILED"] 
+        and is_recent(s.get("updateTime"), STALE_THRESHOLD_SEC)
+    ]
+    
+    session_name = None
     if active_sessions:
-        session_id = active_sessions[0]["id"]
-        logging.info(f"Resuming existing session: {session_id}")
+        session_name = active_sessions[0]["name"]
+        logging.info(f"Resuming existing session: {session_name}")
     else:
         # 2. Start Session
-        # Prompt includes marking task as finished
         full_prompt = (
             f"{task}\n\n"
             f"Use your best judgment, and ask absolutely no questions.\n\n"
@@ -270,17 +240,23 @@ def run_jules_task(
         )
         
         logging.info(f"Starting new Jules session for: '{task}'")
-        session_resp = api.create_session(full_prompt, repo_slug, work_branch)
-        session_id = session_resp["id"]
-        logging.info(f"Session started: {session_id}")
+        session = client.sessions.create(
+            prompt=full_prompt,
+            source=f"sources/github/{repo_slug}",
+            starting_branch=work_branch,
+            automation_mode="AUTO_CREATE_PR",
+            title=f"Ralph Task: {task[:30]}..."
+        )
+        session_name = session.name
+        logging.info(f"Session started: {session_name}")
 
     # 3. Wait
-    success, status, session = wait_for_session(api, session_id, timeout)
+    success, status, session_info = wait_for_session(client, session_name, timeout)
     if not success:
         return False, status
 
     # 4. Apply changes
-    if session and apply_jules_changes(session, work_branch):
+    if session_info and apply_jules_changes(session_info, work_branch):
         return True, "SUCCESS"
     else:
         return False, "APPLY_FAILED"
@@ -307,7 +283,7 @@ def parse_plan(plan_path: str) -> Tuple[List[Tuple[int, str]], int]:
     return pending_tasks, all_task_count
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ralph Wiggum: Autonomous Jules API Harness")
+    parser = argparse.ArgumentParser(description="Ralph Wiggum: Autonomous Jules SDK Harness")
     parser.add_argument("--plan", required=True, help="Path to markdown checklist file")
     parser.add_argument("--project", default=".", help="Root path of the project")
     parser.add_argument("--branch", default="ralph-wiggum", help="The persistent work branch")
@@ -322,15 +298,16 @@ def main() -> None:
         logging.error("JULES_API_KEY environment variable is missing.")
         sys.exit(1)
 
-    api = JulesAPI(api_key)
-    
     abs_project_path = os.path.abspath(args.project)
     if not os.path.exists(abs_project_path):
         logging.error(f"Project path does not exist: {abs_project_path}")
         sys.exit(1)
     os.chdir(abs_project_path)
 
-    # Initialize
+    # Initialize SDK Client
+    client = JulesClient(api_key=api_key)
+
+    # Initialize Git
     ensure_work_branch(args.branch)
     push_changes(args.branch)
 
@@ -339,28 +316,31 @@ def main() -> None:
         logging.info("No tasks to perform.")
         sys.exit(0)
 
-    for i, (abs_idx, task) in enumerate(tasks):
-        logging.info(f"--- Task {abs_idx}/{total_count}: {task} ---")
-        
-        attempts = 0
-        success = False
-        while attempts < MAX_RETRIES and not success:
-            attempts += 1
-            task_success, status = run_jules_task(api, task, ".", args.timeout, args.branch, args.plan)
+    try:
+        for i, (abs_idx, task) in enumerate(tasks):
+            logging.info(f"--- Task {abs_idx}/{total_count}: {task} ---")
             
-            if task_success:
-                push_changes(args.branch)
-                success = True
-                logging.info(f"Task completed.")
-            else:
-                logging.warning(f"Task failed (Attempt {attempts}). Reason: {status}")
-                if attempts < MAX_RETRIES: time.sleep(10)
+            attempts = 0
+            success = False
+            while attempts < MAX_RETRIES and not success:
+                attempts += 1
+                task_success, status = run_jules_task(client, task, ".", args.timeout, args.branch, args.plan)
+                
+                if task_success:
+                    push_changes(args.branch)
+                    success = True
+                    logging.info(f"Task completed.")
+                else:
+                    logging.warning(f"Task failed (Attempt {attempts}). Reason: {status}")
+                    if attempts < MAX_RETRIES: time.sleep(10)
 
-        if not success:
-            logging.error(f"CRITICAL FAILURE: Task '{task}' failed after {MAX_RETRIES} attempts.")
-            sys.exit(1)
+            if not success:
+                logging.error(f"CRITICAL FAILURE: Task '{task}' failed after {MAX_RETRIES} attempts.")
+                sys.exit(1)
 
-    logging.info("All tasks completed.")
+        logging.info("All tasks completed.")
+    finally:
+        client.close()
 
 if __name__ == "__main__":
     main()

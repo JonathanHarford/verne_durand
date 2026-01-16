@@ -20,28 +20,35 @@ flowchart TD
     
     subgraph Execution [run_jules_task]
         direction TB
-        Entry[Ensure Work Branch] --> CheckExisting{Active sessions already?}
+        Entry[Ensure Work Branch] --> CheckExisting{Active sessions?}
         
-        CheckExisting -- Yes --> UseExisting[Set resume_id]
-        CheckExisting -- No --> StartNew[API: create_session]
+        CheckExisting -- Active Session Found --> IsRecent{Recent? < 20m}
+        IsRecent -- Yes --> UseExisting[Set resume_name]
+        IsRecent -- No --> StartNew
+        
+        CheckExisting -- No Active Sessions --> StartNew[SDK: sessions.create]
         
         UseExisting --> WaitLoop
         StartNew --> WaitLoop[Wait Loop]
         
-        WaitLoop --> Poll[API: get_session status]
+        WaitLoop --> Poll[SDK: sessions.get status]
         Poll --> Status{Status?}
-        Status -- RUNNING --> CheckActivities[API: list_activities]
+        
+        Status -- AWAITING_PLAN_APPROVAL --> Approve[SDK: sessions.approve_plan]
+        Approve --> WaitWait
+        
+        Status -- IN_PROGRESS/PLANNING/RUNNING --> CheckActivities[SDK: activities.list_all]
         CheckActivities --> HasNewActivity{New Activity?}
         HasNewActivity -- Yes --> ResetStale[Update last_act_time]
         ResetStale --> WaitWait[Wait 10s]
         WaitWait --> WaitLoop
+        
         HasNewActivity -- No --> IsStale{Stale > 20m?}
         IsStale -- No --> WaitWait
-        IsStale -- Yes --> CancelStale[API: delete_session]
-        CancelStale --> ReturnStale[Return STALE status]
+        IsStale -- Yes --> ReturnStale[Return STALE status]
         
-        Status -- FAILED/ERROR/CANCELLED --> ReturnFail[Return failure status]
-        Status -- COMPLETED/SUCCEEDED --> ApplyChanges[Apply Changes]
+        Status -- FAILED/ERROR --> ReturnFail[Return failure status]
+        Status -- COMPLETED --> ApplyChanges[Apply Changes]
         
         subgraph MergeWorkflow [Apply Changes Flow]
             direction TB
@@ -69,14 +76,15 @@ flowchart TD
     RetryWait --> RetryLoop
 ```
 
-## Ralph Wiggum: Autonomous Jules API Harness
+## Ralph Wiggum: Autonomous Jules SDK Harness
 
-This script automates the execution of multiple tasks using the Jules API. It parses a markdown checklist (e.g., `PLAN.md`) and executes unchecked tasks sequentially.
+This script automates the execution of multiple tasks using the Jules AI agent. It parses a markdown checklist (e.g., `PLAN.md`) and executes unchecked tasks sequentially.
 
 ### Key Features
-- **API-Based**: Uses direct REST API calls via `httpx`, removing dependency on the `jules` CLI.
+- **SDK-Based**: Uses the official `jules-agent-sdk`, ensuring robust communication and automatic retries.
 - **`uv` Ready**: Includes inline dependency metadata for zero-setup execution.
 - **Resilient**: Automatically resumes active sessions or retries failed tasks (up to 3 times).
+- **Auto-Approval**: Detects when a plan requires approval and automatically approves it to maintain autonomy.
 - **Git Integration**: Automatically manages branch creation, remote pushing, and merging Jules' generated changes.
 
 ### Usage
@@ -87,4 +95,4 @@ uv run ralph-wiggum-jules.py --plan PLAN.md --project /path/to/project
 ```
 
 ### Flow Architecture
-The diagram above illustrates the polling and merge logic used to coordinate between the local repository and the Jules autonomous agent.
+The diagram above illustrates the orchestration logic between the local repository and the Jules autonomous agent, now streamlined through the Python SDK.
