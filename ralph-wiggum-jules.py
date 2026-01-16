@@ -11,7 +11,7 @@ from datetime import datetime
 
 # CONFIGURATION
 JULES_BIN = "jules"  # Assumes 'jules' is in your PATH
-JULES_API_KEY = ""   # OPTIONAL: Paste your API key here if not setting it via environment variable
+JULES_API_KEY = "9642c385554e5a1931f1eafc6db4eeba8a2f94ab"   # OPTIONAL (DO NOT COMMIT)
 DEFAULT_TIMEOUT_SEC = 600
 MAX_RETRIES = 3
 
@@ -127,6 +127,27 @@ def commit_changes(branch, message):
         log(f"Failed to commit/push changes: {e.stderr}", "ERROR")
 
 
+def get_repo_slug():
+    """
+    Attempts to extract 'owner/repo' from the git remote.
+    """
+    try:
+        ret = subprocess.run(
+            ["git", "remote", "get-url", "origin"], 
+            capture_output=True, text=True, check=False
+        )
+        if ret.returncode != 0:
+            return None
+        url = ret.stdout.strip()
+        # Match git@github.com:owner/repo.git or https://github.com/owner/repo.git
+        match = re.search(r"github\.com[:/]([^/]+/[^/.]+)(?:\.git)?", url)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return None
+
+
 # --- JULES INTERACTION ---
 
 def get_active_sessions():
@@ -191,11 +212,11 @@ def wait_for_session(session_id, timeout):
     return False, "TIMEOUT"
 
 
-def run_jules_task(task, project_path, timeout, work_branch):
+def run_jules_task(task, project_path, timeout, work_branch, plan_path):
     """
     Runs a Jules task using the async workflow:
     1. Snapshot sessions
-    2. Start new session
+    2. Start new session (with instruction to mark task finished)
     3. Identify new ID
     4. Wait for completion
     5. Merge changes and delete auxiliary branch
@@ -207,12 +228,28 @@ def run_jules_task(task, project_path, timeout, work_branch):
     # 2. Start Session (ensure repo is pushed first so Jules sees the latest)
     # We already push at the end of the previous task, but let's be sure.
     log(f"Spawning Jules for task: '{task}'", "SYSTEM")
-    cmd = [JULES_BIN, "new", "--repo", os.path.abspath(project_path), task]
+    
+    # Instruction for Jules to mark the task completed in the plan file
+    full_prompt = (
+        f"{task}\n\n"
+        f"Use your best judgment, and ask absolutely no questions.\n\n"
+        f"As your final step, update the '{plan_path}' file to mark this task as completed "
+        f"by changing '[ ] {task}' to '[x] {task}'. If you inadvertently completed any subsequent tasks, mark them off as well."
+    )
+    
+    repo_id = get_repo_slug() or os.path.abspath(project_path)
+    cmd = [JULES_BIN, "new", "--repo", repo_id, full_prompt]
     
     ret = subprocess.run(cmd, capture_output=True, text=True)
     
+    # Check for known error patterns even if returncode is 0
+    if "Error:" in ret.stdout or "Error:" in ret.stderr:
+        err_msg = ret.stderr if ret.stderr else ret.stdout
+        log(f"Jules reported an error: {err_msg.strip()}", "ERROR")
+        return False, "JULES_ERROR"
+
     if ret.returncode != 0:
-        log(f"Failed to start Jules session: {ret.stderr}", "ERROR")
+        log(f"Failed to start Jules session (Exit {ret.returncode}): {ret.stderr}", "ERROR")
         return False, ret.stderr
 
     # 3. Identify ID
@@ -223,19 +260,31 @@ def run_jules_task(task, project_path, timeout, work_branch):
     if len(diff) == 1:
         session_id = diff.pop()
     elif len(diff) > 1:
-        match = re.search(r"Session ID:\s*([^\s]+)", ret.stdout, re.IGNORECASE)
+        # Ambiguous, try to find the one that matches our anticipated latest one? 
+        match = re.search(r"(?:Session ID:|session)\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
         if match:
             session_id = match.group(1)
         else:
              session_id = list(diff)[0]
              log(f"Warning: Multiple new sessions found, picking {session_id}", "WARNING")
     else:
-        match = re.search(r"Session ID:\s*([^\s]+)", ret.stdout, re.IGNORECASE)
+        # Fallback to parsing stdout/stderr
+        # Pattern covers "Session ID: 123", "Created session 123", etc.
+        match = re.search(r"(?:Session ID:|session)\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
         if match:
             session_id = match.group(1)
         else:
-            log("Could not identify new Session ID.", "ERROR")
-            return False, "NO_ID"
+            # Maybe it's just a raw alphanumeric string on a line?
+            for line in (ret.stdout + ret.stderr).splitlines():
+                if re.match(r"^[a-zA-Z0-9_-]+$", line.strip()):
+                    session_id = line.strip()
+                    break
+            
+            if not session_id:
+                log("Could not identify new Session ID.", "ERROR")
+                log(f"STDOUT: {ret.stdout}", "DEBUG")
+                log(f"STDERR: {ret.stderr}", "DEBUG")
+                return False, "NO_ID"
 
     log(f"Session started: {session_id}", "INFO")
 
@@ -305,13 +354,19 @@ def parse_plan(plan_path):
     with open(plan_path, "r") as f:
         lines = f.readlines()
 
-    tasks = []
-    for line in lines:
-        match = re.match(r"^\s*[-*]\s*\[ \]\s+(.*)", line)
-        if match:
-            tasks.append(match.group(1).strip())
+    pending_tasks = []
+    all_task_count = 0
+    for i, line in enumerate(lines):
+        # Count all tasks (checked or unchecked) to get the total
+        if re.match(r"^\s*[-*]\s*\[[ x]\]\s+(.*)", line):
+            all_task_count += 1
+            
+            # If it's unchecked, add it to our pending list
+            match = re.match(r"^\s*[-*]\s*\[ \]\s+(.*)", line)
+            if match:
+                pending_tasks.append((all_task_count, match.group(1).strip()))
 
-    return tasks
+    return pending_tasks, all_task_count
 
 
 def main():
@@ -369,17 +424,17 @@ def main():
 
     # 4. Parse Plan
     # Now that we have chdir'd, args.plan is relative to the project root
-    tasks = parse_plan(args.plan)
+    tasks, total_count = parse_plan(args.plan)
 
     if not tasks:
         log("No unchecked tasks found.", "SUCCESS")
         sys.exit(0)
 
-    log(f"Found {len(tasks)} pending tasks.", "INFO")
+    log(f"Found {len(tasks)} pending tasks out of {total_count} total.", "INFO")
 
     # 5. Execution Loop
-    for i, task in enumerate(tasks):
-        log(f"Starting Task {i + 1}/{len(tasks)}: {task}", "SYSTEM")
+    for abs_idx, task in tasks:
+        log(f"Starting Task {abs_idx}/{total_count}: {task}", "SYSTEM")
 
         attempts = 0
         success = False
@@ -390,14 +445,19 @@ def main():
             # Ensure we are on the work branch before starting
             ensure_work_branch(args.branch)
 
-            # Run Jules
-            task_success, status = run_jules_task(task, ".", args.timeout, args.branch)
+            # Run Jules (Now passing args.plan)
+            task_success, status = run_jules_task(task, ".", args.timeout, args.branch, args.plan)
 
             if task_success:
+                # Local checkbox logic removed - Jules handles it now
                 commit_changes(args.branch, f"Jules Task: {task}")
                 success = True
                 log(f"Task completed successfully.", "SUCCESS")
             else:
+                if status == "JULES_ERROR":
+                    log("Aborting due to fatal Jules error.", "ERROR")
+                    sys.exit(1)
+                
                 log(
                     f"Task failed (Attempt {attempts}). Reason: {status}",
                     "WARNING",
