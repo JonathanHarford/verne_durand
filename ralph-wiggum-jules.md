@@ -1,5 +1,9 @@
 ```mermaid
-flowchart LR
+---
+config:
+  layout: elk
+---
+flowchart TD
     Start((Start)) --> Init[Initialize: Check JULES_API_KEY, Chdir]
     Init --> ParsePlan[Parse PLAN.md for Unchecked Tasks]
     ParsePlan --> HasTasks{Tasks left?}
@@ -13,21 +17,29 @@ flowchart LR
     RetryLoop -- No --> CritFail((Critical Failure))
     
     RetryLoop -- Yes --> IncAttempts[attempts++]
-    IncAttempts --> EnsureBranch[Ensure Work Branch]
-    EnsureBranch --> CheckExisting{Find Active Sessions via API?}
-    
-    CheckExisting -- Yes --> UseExisting[Set resume_id]
-    CheckExisting -- No --> StartNew[API: create_session]
-    
-    UseExisting --> WaitLoop
-    StartNew --> WaitLoop[Wait Loop]
     
     subgraph Execution [run_jules_task]
         direction TB
+        Entry[Ensure Work Branch] --> CheckExisting{Active sessions already?}
+        
+        CheckExisting -- Yes --> UseExisting[Set resume_id]
+        CheckExisting -- No --> StartNew[API: create_session]
+        
+        UseExisting --> WaitLoop
+        StartNew --> WaitLoop[Wait Loop]
+        
         WaitLoop --> Poll[API: get_session status]
         Poll --> Status{Status?}
-        Status -- RUNNING --> Wait5[Wait 10s]
-        Wait5 --> WaitLoop
+        Status -- RUNNING --> CheckActivities[API: list_activities]
+        CheckActivities --> HasNewActivity{New Activity?}
+        HasNewActivity -- Yes --> ResetStale[Update last_act_time]
+        ResetStale --> WaitWait[Wait 10s]
+        WaitWait --> WaitLoop
+        HasNewActivity -- No --> IsStale{Stale > 20m?}
+        IsStale -- No --> WaitWait
+        IsStale -- Yes --> CancelStale[API: delete_session]
+        CancelStale --> ReturnStale[Return STALE status]
+        
         Status -- FAILED/ERROR/CANCELLED --> ReturnFail[Return failure status]
         Status -- COMPLETED/SUCCEEDED --> ApplyChanges[Apply Changes]
         
@@ -43,10 +55,14 @@ flowchart LR
         ApplyChanges --> MergeWorkflow
     end
     
-    GetNextTask --> Execution
-    Execution --> Result{Result?}
+    IncAttempts --> Entry
     
-    Result -- SUCCESS --> Push[Git Push Work Branch]
+    ReturnSuccess --> Result
+    ReturnFail --> Result
+    ReturnStale --> Result
+    ReturnApplyFail --> Result
+    
+    Result{Result?} -- SUCCESS --> Push[Git Push Work Branch]
     Push --> HasTasks
     
     Result -- Others --> RetryWait[Wait 10s]
