@@ -18,6 +18,7 @@ import httpx
 # CONFIGURATION
 DEFAULT_TIMEOUT_SEC = 600
 MAX_RETRIES = 3
+STALE_THRESHOLD_SEC = 1200 # 20 minutes
 API_BASE_URL = "https://jules.googleapis.com/v1alpha"
 
 class JulesAPI:
@@ -70,6 +71,10 @@ class JulesAPI:
         path = session_id if "/" in session_id else f"sessions/{session_id}"
         data = self._request("GET", f"{path}/activities", params={"pageSize": 100})
         return data.get("activities", [])
+
+    def delete_session(self, session_id: str) -> Dict:
+        path = session_id if "/" in session_id else f"sessions/{session_id}"
+        return self._request("DELETE", path)
 
 def configure_logging(verbose: bool = False) -> None:
     """Configures the logging module."""
@@ -150,6 +155,9 @@ def get_repo_slug() -> Optional[str]:
 def wait_for_session(api: JulesAPI, session_id: str, timeout: int) -> Tuple[bool, str, Optional[Dict]]:
     """Polls session status until completion or timeout."""
     start_time = time.time()
+    last_act_time = time.time()
+    last_act_count = 0
+    
     logging.info(f"Waiting for session {session_id}...")
     
     while (time.time() - start_time) < timeout:
@@ -162,6 +170,17 @@ def wait_for_session(api: JulesAPI, session_id: str, timeout: int) -> Tuple[bool
             if state in ["FAILED", "CANCELLED", "ERROR"]:
                 return False, state, session
             
+            # Stale check
+            activities = api.list_activities(session_id)
+            if len(activities) > last_act_count:
+                last_act_count = len(activities)
+                last_act_time = time.time()
+                logging.debug(f"New activity detected. Count: {last_act_count}")
+            elif (time.time() - last_act_time) > STALE_THRESHOLD_SEC:
+                logging.warning(f"Session {session_id} has been stale for > {STALE_THRESHOLD_SEC}s. Cancelling.")
+                api.delete_session(session_id)
+                return False, "STALE", None
+
             # Progress update?
             logging.debug(f"Session {session_id} state: {state}")
             time.sleep(10)
