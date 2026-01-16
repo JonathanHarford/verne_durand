@@ -1,9 +1,10 @@
+#!/usr/bin/env -S uv run --script
 # /// script
 # dependencies = [
 #   "httpx",
 # ]
 # ///
-#!/usr/bin/env python3
+
 import argparse
 import logging
 import os
