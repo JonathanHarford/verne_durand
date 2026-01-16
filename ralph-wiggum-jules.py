@@ -150,7 +150,7 @@ def get_repo_slug() -> Optional[str]:
 
 # --- JULES INTERACTION ---
 
-def get_active_sessions(repo_filter: Optional[str] = None) -> Set[str]:
+def get_active_sessions(repo_filter: Optional[str] = None, active_only: bool = False) -> Set[str]:
     """
     Returns a set of active session IDs.
     """
@@ -167,11 +167,21 @@ def get_active_sessions(repo_filter: Optional[str] = None) -> Set[str]:
     sessions = set()
     lines = ret.stdout.splitlines()
     for line in lines:
+        line_upper = line.upper()
         parts = line.strip().split()
-        if not parts:
+        if not parts or parts[0] == "ID" or "SESSION" in parts[0]:
             continue
-        if "SESSION" in parts[0].upper() or "ID" == parts[0].upper():
-            continue
+        
+        # Determine status. It's usually the last column.
+        # Fixed statuses that are terminal:
+        if active_only:
+            if any(term in line_upper for term in ["COMPLETED", "FAILED", "ABORTED", "DONE"]):
+                continue
+            # If line ends with 'COMPLETED' or 'FAILED' etc.
+            status = parts[-1].upper()
+            if status in ["COMPLETED", "FAILED", "ABORTED", "DONE"]:
+                continue
+
         sessions.add(parts[0])
     
     return sessions
@@ -489,17 +499,6 @@ def main() -> None:
 
     logging.info(f"Found {len(tasks)} pending tasks out of {total_count} total.")
 
-    repo_id = get_repo_slug() or os.path.abspath(args.project)
-
-    resume_session_id = None
-    existing_sessions = get_active_sessions(repo_filter=repo_id)
-    if existing_sessions:
-        resume_session_id = list(existing_sessions)[0]
-        if len(existing_sessions) > 1:
-            logging.warning(f"Multiple active sessions found. Picking {resume_session_id} to resume.")
-        else:
-            logging.info(f"Found active session {resume_session_id}. Resuming...")
-
     # 5. Execution Loop
     for i, (abs_idx, task) in enumerate(tasks):
         logging.info(f"Starting Task {abs_idx}/{total_count}: {task}")
@@ -510,15 +509,23 @@ def main() -> None:
         while attempts < MAX_RETRIES and not success:
             attempts += 1
 
+            # Check for existing session for this repo before starting a new one
+            repo_id = get_repo_slug() or os.path.abspath(args.project)
+            existing_active = get_active_sessions(repo_filter=repo_id, active_only=True)
+            
             current_resume_id = None
-            if resume_session_id and i == 0 and attempts == 1:
-                current_resume_id = resume_session_id
+            if existing_active:
+                current_resume_id = list(existing_active)[0]
+                logging.info(f"Found existing active session {current_resume_id} for this repo. Resuming...")
 
             # Ensure we are on the work branch before starting
             ensure_work_branch(args.branch)
 
-            # Run Jules (Now passing args.plan)
-            task_success, status = run_jules_task(task, ".", args.timeout, args.branch, args.plan, resume_session_id=current_resume_id)
+            # Run Jules
+            task_success, status = run_jules_task(
+                task, ".", args.timeout, args.branch, args.plan, 
+                resume_session_id=current_resume_id
+            )
 
             if task_success:
                 # Local checkbox logic removed - Jules handles it now
