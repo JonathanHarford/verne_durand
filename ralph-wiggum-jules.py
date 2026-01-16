@@ -212,7 +212,7 @@ def wait_for_session(session_id, timeout):
     return False, "TIMEOUT"
 
 
-def run_jules_task(task, project_path, timeout, work_branch, plan_path):
+def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_session_id=None):
     """
     Runs a Jules task using the async workflow:
     1. Snapshot sessions
@@ -222,71 +222,75 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path):
     5. Merge changes and delete auxiliary branch
     """
     
-    # 1. Snapshot
-    existing_sessions = get_active_sessions()
-    
-    # 2. Start Session (ensure repo is pushed first so Jules sees the latest)
-    # We already push at the end of the previous task, but let's be sure.
-    log(f"Spawning Jules for task: '{task}'", "SYSTEM")
-    
-    # Instruction for Jules to mark the task completed in the plan file
-    full_prompt = (
-        f"{task}\n\n"
-        f"Use your best judgment, and ask absolutely no questions.\n\n"
-        f"As your final step, update the '{plan_path}' file to mark this task as completed "
-        f"by changing '[ ] {task}' to '[x] {task}'. If you inadvertently completed any subsequent tasks, mark them off as well."
-    )
-    
-    repo_id = get_repo_slug() or os.path.abspath(project_path)
-    cmd = [JULES_BIN, "new", "--repo", repo_id, full_prompt]
-    
-    ret = subprocess.run(cmd, capture_output=True, text=True)
-    
-    # Check for known error patterns even if returncode is 0
-    if "Error:" in ret.stdout or "Error:" in ret.stderr:
-        err_msg = ret.stderr if ret.stderr else ret.stdout
-        log(f"Jules reported an error: {err_msg.strip()}", "ERROR")
-        return False, "JULES_ERROR"
+    session_id = resume_session_id
 
-    if ret.returncode != 0:
-        log(f"Failed to start Jules session (Exit {ret.returncode}): {ret.stderr}", "ERROR")
-        return False, ret.stderr
+    if not session_id:
+        # 1. Snapshot
+        existing_sessions = get_active_sessions()
 
-    # 3. Identify ID
-    new_sessions = get_active_sessions()
-    diff = new_sessions - existing_sessions
-    
-    session_id = None
-    if len(diff) == 1:
-        session_id = diff.pop()
-    elif len(diff) > 1:
-        # Ambiguous, try to find the one that matches our anticipated latest one? 
-        match = re.search(r"(?:Session ID:|session)\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
-        if match:
-            session_id = match.group(1)
+        # 2. Start Session (ensure repo is pushed first so Jules sees the latest)
+        # We already push at the end of the previous task, but let's be sure.
+        log(f"Spawning Jules for task: '{task}'", "SYSTEM")
+
+        # Instruction for Jules to mark the task completed in the plan file
+        full_prompt = (
+            f"{task}\n\n"
+            f"Use your best judgment, and ask absolutely no questions.\n\n"
+            f"As your final step, update the '{plan_path}' file to mark this task as completed "
+            f"by changing '[ ] {task}' to '[x] {task}'. If you inadvertently completed any subsequent tasks, mark them off as well."
+        )
+
+        repo_id = get_repo_slug() or os.path.abspath(project_path)
+        cmd = [JULES_BIN, "new", "--repo", repo_id, full_prompt]
+
+        ret = subprocess.run(cmd, capture_output=True, text=True)
+
+        # Check for known error patterns even if returncode is 0
+        if "Error:" in ret.stdout or "Error:" in ret.stderr:
+            err_msg = ret.stderr if ret.stderr else ret.stdout
+            log(f"Jules reported an error: {err_msg.strip()}", "ERROR")
+            return False, "JULES_ERROR"
+
+        if ret.returncode != 0:
+            log(f"Failed to start Jules session (Exit {ret.returncode}): {ret.stderr}", "ERROR")
+            return False, ret.stderr
+
+        # 3. Identify ID
+        new_sessions = get_active_sessions()
+        diff = new_sessions - existing_sessions
+
+        if len(diff) == 1:
+            session_id = diff.pop()
+        elif len(diff) > 1:
+            # Ambiguous, try to find the one that matches our anticipated latest one?
+            match = re.search(r"(?:Session ID:|session)\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
+            if match:
+                session_id = match.group(1)
+            else:
+                session_id = list(diff)[0]
+                log(f"Warning: Multiple new sessions found, picking {session_id}", "WARNING")
         else:
-             session_id = list(diff)[0]
-             log(f"Warning: Multiple new sessions found, picking {session_id}", "WARNING")
+            # Fallback to parsing stdout/stderr
+            # Pattern covers "Session ID: 123", "Created session 123", etc.
+            match = re.search(r"(?:Session ID:|session)\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
+            if match:
+                session_id = match.group(1)
+            else:
+                # Maybe it's just a raw alphanumeric string on a line?
+                for line in (ret.stdout + ret.stderr).splitlines():
+                    if re.match(r"^[a-zA-Z0-9_-]+$", line.strip()):
+                        session_id = line.strip()
+                        break
+
+                if not session_id:
+                    log("Could not identify new Session ID.", "ERROR")
+                    log(f"STDOUT: {ret.stdout}", "DEBUG")
+                    log(f"STDERR: {ret.stderr}", "DEBUG")
+                    return False, "NO_ID"
+
+        log(f"Session started: {session_id}", "INFO")
     else:
-        # Fallback to parsing stdout/stderr
-        # Pattern covers "Session ID: 123", "Created session 123", etc.
-        match = re.search(r"(?:Session ID:|session)\s*([a-zA-Z0-9_-]+)", ret.stdout + ret.stderr, re.IGNORECASE)
-        if match:
-            session_id = match.group(1)
-        else:
-            # Maybe it's just a raw alphanumeric string on a line?
-            for line in (ret.stdout + ret.stderr).splitlines():
-                if re.match(r"^[a-zA-Z0-9_-]+$", line.strip()):
-                    session_id = line.strip()
-                    break
-            
-            if not session_id:
-                log("Could not identify new Session ID.", "ERROR")
-                log(f"STDOUT: {ret.stdout}", "DEBUG")
-                log(f"STDERR: {ret.stderr}", "DEBUG")
-                return False, "NO_ID"
-
-    log(f"Session started: {session_id}", "INFO")
+        log(f"Resuming existing session: {session_id}", "INFO")
 
     # 4. Wait
     success, status = wait_for_session(session_id, timeout)
@@ -432,8 +436,17 @@ def main():
 
     log(f"Found {len(tasks)} pending tasks out of {total_count} total.", "INFO")
 
+    resume_session_id = None
+    existing_sessions = get_active_sessions()
+    if existing_sessions:
+        resume_session_id = list(existing_sessions)[0]
+        if len(existing_sessions) > 1:
+            log(f"Warning: Multiple active sessions found. Picking {resume_session_id} to resume.", "WARNING")
+        else:
+            log(f"Found active session {resume_session_id}. Resuming...", "INFO")
+
     # 5. Execution Loop
-    for abs_idx, task in tasks:
+    for i, (abs_idx, task) in enumerate(tasks):
         log(f"Starting Task {abs_idx}/{total_count}: {task}", "SYSTEM")
 
         attempts = 0
@@ -442,11 +455,15 @@ def main():
         while attempts < MAX_RETRIES and not success:
             attempts += 1
 
+            current_resume_id = None
+            if resume_session_id and i == 0 and attempts == 1:
+                current_resume_id = resume_session_id
+
             # Ensure we are on the work branch before starting
             ensure_work_branch(args.branch)
 
             # Run Jules (Now passing args.plan)
-            task_success, status = run_jules_task(task, ".", args.timeout, args.branch, args.plan)
+            task_success, status = run_jules_task(task, ".", args.timeout, args.branch, args.plan, resume_session_id=current_resume_id)
 
             if task_success:
                 # Local checkbox logic removed - Jules handles it now
