@@ -1,3 +1,5 @@
 .clj-kondo
 .lsp
-
+.env
+inspect_sdk.py
+ralph_verify/
