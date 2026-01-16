@@ -1,6 +1,6 @@
 ```mermaid
-flowchart TD
-    Start((Start)) --> Init[Initialize: Check API Key, Chdir]
+flowchart LR
+    Start((Start)) --> Init[Initialize: Check JULES_API_KEY, Chdir]
     Init --> ParsePlan[Parse PLAN.md for Unchecked Tasks]
     ParsePlan --> HasTasks{Tasks left?}
     
@@ -14,54 +14,61 @@ flowchart TD
     
     RetryLoop -- Yes --> IncAttempts[attempts++]
     IncAttempts --> EnsureBranch[Ensure Work Branch]
-    EnsureBranch --> CheckExisting{Existing Active Session for Repo?}
+    EnsureBranch --> CheckExisting{Find Active Sessions via API?}
     
-    CheckExisting -- Yes --> UseExisting[Set resume_session_id]
-    CheckExisting -- No --> ClearResume[Set resume_session_id = None]
+    CheckExisting -- Yes --> UseExisting[Set resume_id]
+    CheckExisting -- No --> StartNew[API: create_session]
     
-    UseExisting --> TaskStart[Run Jules Task]
-    ClearResume --> TaskStart
+    UseExisting --> WaitLoop
+    StartNew --> WaitLoop[Wait Loop]
     
     subgraph Execution [run_jules_task]
         direction TB
-        HasResume{Has resume_id?}
-        HasResume -- No --> Snapshot[Snapshot Sessions]
-        Snapshot --> NewSession[Start 'jules new']
-        NewSession --> IsError{Initial Error?}
-        IsError -- Yes --> ReturnFatal[Return JULES_ERROR]
-        IsError -- No --> Identify[Identify New Session ID]
-        
-        HasResume -- Yes --> Identify
-        
-        Identify --> Wait5[Wait 5s]
-        Wait5 --> Poll[Poll 'jules remote list']
+        WaitLoop --> Poll[API: get_session status]
         Poll --> Status{Status?}
-        Status -- RUNNING --> Wait5
-        Status -- FAILED/LOST/TIMEOUT --> ReturnFail[Return failure status]
-        Status -- COMPLETED --> MergeWorkflow
+        Status -- RUNNING --> Wait5[Wait 10s]
+        Wait5 --> WaitLoop
+        Status -- FAILED/ERROR/CANCELLED --> ReturnFail[Return failure status]
+        Status -- COMPLETED/SUCCEEDED --> ApplyChanges[Apply Changes]
         
-        subgraph MergeWorkflow [Merge Flow]
+        subgraph MergeWorkflow [Apply Changes Flow]
             direction TB
-            TempBranch[Create Temp Branch] --> JulesPull[Jules Remote Pull --apply]
-            JulesPull --> PullSuccess{Pull OK?}
-            PullSuccess -- No --> Recover[Cleanup Temp Branch]
-            Recover --> ReturnApplyFail[Return APPLY_FAILED]
-            PullSuccess -- Yes --> CommitTemp[Commit on Temp Branch]
-            CommitTemp --> SwitchBack[Switch back to Work Branch]
-            SwitchBack --> Merge[Merge Temp Branch]
-            Merge --> DelTemp[Delete Temp Branch]
-            DelTemp --> ReturnSuccess[Return SUCCESS]
+            CheckOutputs[Check Session Outputs for Pull Request] --> Fetch[Git Fetch Origin]
+            Fetch --> FindBranch[Find Jules Remote Branch]
+            FindBranch --> Merge[Git Merge Remote Branch]
+            Merge --> MergeSuccess{Merge OK?}
+            MergeSuccess -- Yes --> ReturnSuccess[Return SUCCESS]
+            MergeSuccess -- No --> ReturnApplyFail[Return APPLY_FAILED]
         end
+        ApplyChanges --> MergeWorkflow
     end
     
-    TaskStart --> Execution
+    GetNextTask --> Execution
     Execution --> Result{Result?}
     
-    Result -- SUCCESS --> Push[Commit & Push Work Branch]
+    Result -- SUCCESS --> Push[Git Push Work Branch]
     Push --> HasTasks
     
-    Result -- JULES_ERROR --> CritFail
-    
-    Result -- Others --> RetryWait[Wait 5s]
+    Result -- Others --> RetryWait[Wait 10s]
     RetryWait --> RetryLoop
 ```
+
+## Ralph Wiggum: Autonomous Jules API Harness
+
+This script automates the execution of multiple tasks using the Jules API. It parses a markdown checklist (e.g., `PLAN.md`) and executes unchecked tasks sequentially.
+
+### Key Features
+- **API-Based**: Uses direct REST API calls via `httpx`, removing dependency on the `jules` CLI.
+- **`uv` Ready**: Includes inline dependency metadata for zero-setup execution.
+- **Resilient**: Automatically resumes active sessions or retries failed tasks (up to 3 times).
+- **Git Integration**: Automatically manages branch creation, remote pushing, and merging Jules' generated changes.
+
+### Usage
+Run the harness using `uv`:
+```bash
+export JULES_API_KEY="your-api-key"
+uv run ralph-wiggum-jules.py --plan PLAN.md --project /path/to/project
+```
+
+### Flow Architecture
+The diagram above illustrates the polling and merge logic used to coordinate between the local repository and the Jules autonomous agent.
