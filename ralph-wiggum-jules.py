@@ -150,11 +150,14 @@ def get_repo_slug():
 
 # --- JULES INTERACTION ---
 
-def get_active_sessions():
+def get_active_sessions(repo_filter=None):
     """
     Returns a set of active session IDs.
     """
     cmd = [JULES_BIN, "remote", "list", "--session"]
+    if repo_filter:
+        cmd.extend(["--repo", repo_filter])
+
     ret = subprocess.run(cmd, capture_output=True, text=True)
     
     if ret.returncode != 0:
@@ -223,10 +226,11 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
     """
     
     session_id = resume_session_id
+    repo_id = get_repo_slug() or os.path.abspath(project_path)
 
     if not session_id:
         # 1. Snapshot
-        existing_sessions = get_active_sessions()
+        existing_sessions = get_active_sessions(repo_filter=repo_id)
 
         # 2. Start Session (ensure repo is pushed first so Jules sees the latest)
         # We already push at the end of the previous task, but let's be sure.
@@ -240,7 +244,6 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
             f"by changing '[ ] {task}' to '[x] {task}'. If you inadvertently completed any subsequent tasks, mark them off as well."
         )
 
-        repo_id = get_repo_slug() or os.path.abspath(project_path)
         cmd = [JULES_BIN, "new", "--repo", repo_id, full_prompt]
 
         ret = subprocess.run(cmd, capture_output=True, text=True)
@@ -256,7 +259,7 @@ def run_jules_task(task, project_path, timeout, work_branch, plan_path, resume_s
             return False, ret.stderr
 
         # 3. Identify ID
-        new_sessions = get_active_sessions()
+        new_sessions = get_active_sessions(repo_filter=repo_id)
         diff = new_sessions - existing_sessions
 
         if len(diff) == 1:
@@ -436,8 +439,10 @@ def main():
 
     log(f"Found {len(tasks)} pending tasks out of {total_count} total.", "INFO")
 
+    repo_id = get_repo_slug() or os.path.abspath(args.project)
+
     resume_session_id = None
-    existing_sessions = get_active_sessions()
+    existing_sessions = get_active_sessions(repo_filter=repo_id)
     if existing_sessions:
         resume_session_id = list(existing_sessions)[0]
         if len(existing_sessions) > 1:
