@@ -14,7 +14,6 @@ This script automates the execution of multiple tasks using the Jules AI agent. 
 
 * Show link to Jules session in the output
 * Use YAML for checklist
-* Split diagram into 2
 * Simultaneous tasks
 
 ### Usage
@@ -25,6 +24,8 @@ uv run verne_durand.py --plan PLAN.md --project /path/to/project
 ```
 
 ### Flow Architecture
+
+### 1. Main Orchestration Loop
 ```mermaid
 ---
 config:
@@ -45,51 +46,53 @@ flowchart TD
     
     RetryLoop -- Yes --> IncAttempts[attempts++]
     
-    subgraph Execution [run_jules_task]
-        direction TB
-        Entry[Ensure Work Branch] --> CheckExisting{Active sessions already?}
-        
-        CheckExisting -- Yes --> UseExisting[Set resume_name]
-        CheckExisting -- No --> StartNew[SDK: sessions.create]
-        
-        UseExisting --> WaitLoop
-        StartNew --> WaitLoop[Wait Loop]
-        
-        WaitLoop --> Poll[SDK: sessions.get status]
-        Poll --> Status{Status?}
-        
-        Status -- AWAITING_PLAN_APPROVAL --> Approve[SDK: sessions.approve_plan]
-        Approve --> WaitWait
-        
-        Status -- IN_PROGRESS/PLANNING --> WaitWait[Wait 10s]
-        WaitWait --> WaitLoop
-        
-        Status -- RUNNING --> WaitWait
-        
-        Status -- FAILED/ERROR --> ReturnFail[Return failure status]
-        Status -- COMPLETED --> ApplyChanges[Apply Changes]
-        
-        subgraph MergeWorkflow [Apply Changes Flow]
-            direction TB
-            CheckOutputs[Check Session Outputs for Pull Request] --> Fetch[Git Fetch Origin]
-            Fetch --> FindBranch[Find Jules Remote Branch]
-            FindBranch --> Merge[Git Merge Remote Branch]
-            Merge --> MergeSuccess{Merge OK?}
-            MergeSuccess -- Yes --> ReturnSuccess[Return SUCCESS]
-            MergeSuccess -- No --> ReturnApplyFail[Return APPLY_FAILED]
-        end
-        ApplyChanges --> MergeWorkflow
-    end
+    IncAttempts --> Execution[[Execute Task (See Diagram 2)]]
     
-    IncAttempts --> Entry
-    
-    ReturnSuccess --> Result
-    ReturnFail --> Result
-    ReturnApplyFail --> Result
-    
-    Result{Result?} -- SUCCESS --> Push[Git Push Work Branch]
+    Execution -- SUCCESS --> Push[Git Push Work Branch]
     Push --> HasTasks
     
-    Result -- Others --> RetryWait[Wait 10s]
+    Execution -- FAIL/ERROR --> RetryWait[Wait 10s]
     RetryWait --> RetryLoop
+```
+
+### 2. Task Execution Detail (run_jules_task)
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart TD
+    Entry((Start Task)) --> EnsureBranch[Ensure Work Branch]
+    EnsureBranch --> CheckExisting{Active sessions already?}
+
+    CheckExisting -- Yes --> UseExisting[Set resume_name]
+    CheckExisting -- No --> StartNew[SDK: sessions.create]
+
+    UseExisting --> WaitLoop
+    StartNew --> WaitLoop[Wait Loop]
+
+    WaitLoop --> Poll[SDK: sessions.get status]
+    Poll --> Status{Status?}
+
+    Status -- AWAITING_PLAN_APPROVAL --> Approve[SDK: sessions.approve_plan]
+    Approve --> WaitWait
+
+    Status -- IN_PROGRESS/PLANNING --> WaitWait[Wait 10s]
+    WaitWait --> WaitLoop
+
+    Status -- RUNNING --> WaitWait
+
+    Status -- FAILED/ERROR --> ReturnFail((Return FAILURE))
+    Status -- COMPLETED --> ApplyChanges[Apply Changes]
+
+    subgraph MergeWorkflow [Apply Changes Flow]
+        direction TB
+        CheckOutputs[Check Session Outputs for Pull Request] --> Fetch[Git Fetch Origin]
+        Fetch --> FindBranch[Find Jules Remote Branch]
+        FindBranch --> Merge[Git Merge Remote Branch]
+        Merge --> MergeSuccess{Merge OK?}
+        MergeSuccess -- Yes --> ReturnSuccess((Return SUCCESS))
+        MergeSuccess -- No --> ReturnApplyFail((Return APPLY_FAILED))
+    end
+    ApplyChanges --> MergeWorkflow
 ```
