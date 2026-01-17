@@ -40,24 +40,30 @@ flowchart TD
     HasTasks -- No --> Done((Done))
     
     HasTasks -- Yes --> GetNextTask[Select Next Task]
-    GetNextTask --> InitRetry[Set attempts = 0]
+    GetNextTask --> CheckStatus{Task status?}
+    
+    CheckStatus -- todo --> MoveToStarted[Move task to 'started' list]
+    MoveToStarted --> PushPlan[Git Push Updated Plan]
+    PushPlan --> InitRetry
+    
+    CheckStatus -- started --> InitRetry[Set attempts = 0]
     InitRetry --> RetryLoop{attempts < 3?}
     
-    RetryLoop -- No --> CritFail((Critical Failure))
+    RetryLoop -. No .-> CritFail((Critical Failure))
     
-    RetryLoop -- Yes --> IncAttempts[attempts++]
+    RetryLoop -->|Yes| IncAttempts[attempts++]
     
-    IncAttempts --> Execution((("Execute Task<br>(See Diagram 2)")))
+    IncAttempts --> Execution(((2. Execute Task)))
     
-    Execution -- SUCCESS --> Push[Git Push Work Branch]
+    Execution -->|SUCCESS| Push[Git Push Work Branch]
     Push --> HasTasks
     
-    Execution -- FAIL/ERROR --> CheckRetry{attempts < 3?}
+    Execution -. FAIL/ERROR .-> CheckRetry{attempts < 3?}
 
-    CheckRetry -- Yes --> RetryWait[Wait 15s]
+    CheckRetry -->|Yes| RetryWait[Wait 15s]
     RetryWait --> RetryLoop
 
-    CheckRetry -- No --> RetryLoop
+    CheckRetry -. No .-> CritFail
 ```
 
 ### 2. Task Execution Detail (run_jules_task)
@@ -70,47 +76,32 @@ flowchart TD
     Entry((Start Task)) --> EnsureBranch[Ensure Work Branch]
     EnsureBranch --> CheckExisting{Active sessions already?}
 
-    CheckExisting -- Yes --> UseExisting[Set resume_name]
-    CheckExisting -- No --> StartNew[SDK: sessions.create]
+    CheckExisting -- Yes --> Poll[Get status]
+    CheckExisting -- No --> StartNew[Create Session]
+    StartNew --> Poll
 
-    UseExisting --> WaitLoop
-    StartNew --> WaitLoop[Wait Loop]
-
-    WaitLoop --> Poll[SDK: sessions.get status]
     Poll --> Status{Status?}
 
-    Status -- AWAITING_PLAN_APPROVAL --> Approve[SDK: sessions.approve_plan]
-    Approve --> WaitWait
+    Status -- Working --> Approve[Approve Plan]
+    Approve --> Wait[Wait 30s]
+    Wait --> Poll
 
-    Status -- IN_PROGRESS/PLANNING --> WaitWait[Wait 10s]
-    WaitWait --> WaitLoop
-
-    Status -- RUNNING --> WaitWait
-
-    Status -- FAILED/ERROR --> ReturnFail((Return FAILURE))
-    Status -- COMPLETED --> ApplyChanges((Apply Changes))
-
-    ApplyChanges --> MergeWorkflow(((Merge Workflow)))
-```
-
-### 3. Merge Workflow
-```mermaid
----
-config:
-  layout: elk
----
-flowchart TD
-
-
-        CheckOutputs[Check Session Outputs for Pull Request] --> Fetch[Git Fetch Origin]
-        Fetch --> FindBranch[Find Jules Remote Branch]
-        FindBranch --> Merge[Git Merge Remote Branch]
-        Merge --> MergeSuccess{Merge OK?}
-        MergeSuccess -- Yes --> ReturnSuccess((Return SUCCESS))
-        MergeSuccess -- No --> ReturnApplyFail((Return APPLY_FAILED))
-
+    Status -. FAILED/ERROR .-> ReturnFail((FAIL))
+    Status -- COMPLETED --> CheckOutputs[Get PR ID from Session]
+    subgraph "Apply Changes"
+    CheckOutputs --> FetchPR[Git Fetch PR]
+    
+    
+    
+    FetchPR --> Merge[Git Merge FETCH_HEAD]
+    
+    end
+    Merge --> MergeSuccess((SUCCESS))
+    FetchPR -.-> ReturnFail
+    CheckOutputs -.-> ReturnFail
+    Merge -.-> ReturnFail
 ```
 
 ## The Name
 
-If one person checks out _Anathem_ thanks to this stupid name, it'll've been worth it.
+If one person checks out _Anathem_ thanks to this silly name, it'll've been worth it.

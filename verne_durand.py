@@ -206,8 +206,8 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
 
 def apply_jules_changes(session: Any, work_branch: str) -> bool:
     """
-    Applies the changes from Jules. 
-    If automationMode was AUTO_CREATE_PR, we fetch the branch.
+    Applies the changes from Jules by fetching the PR directly using git.
+    Uses GitHub's PR ref (refs/pull/NUMBER/head) which doesn't require knowing the branch name.
     """
     outputs = getattr(session, "outputs", [])
     pr_data = next((o.pull_request for o in outputs if hasattr(o, "pull_request") and o.pull_request), None)
@@ -219,36 +219,33 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
         logging.error("No Pull Request output found in session. Cannot apply changes automatically yet.")
         return False
 
-    # Pull Request URL format is usually https://github.com/owner/repo/pull/123
-    # Standard Jules behavior for AUTO_CREATE_PR is to push to a branch named like 'jules-session-ID'
-    session_id = getattr(session, "id", None)
-    if not session_id:
-        # Try to extract from name if id is missing
-        name = getattr(session, "name", "")
-        session_id = name.split("/")[-1] if "/" in name else name
-
-    jules_branch = f"jules-{session_id}"
+    # Get PR URL
+    pr_url = getattr(pr_data, "url", None) if hasattr(pr_data, "url") else pr_data.get("url")
+    if not pr_url:
+        logging.error("No PR URL found in pull request output")
+        return False
     
-    logging.info(f"[GIT] Fetching changes from Jules branch '{jules_branch}'...")
+    logging.info(f"[PR] {pr_url}")
+    
+    # Extract PR number from URL (e.g., https://github.com/owner/repo/pull/123)
+    match = re.search(r"/pull/(\d+)", pr_url)
+    if not match:
+        logging.error(f"Could not extract PR number from URL: {pr_url}")
+        return False
+    
+    pr_number = match.group(1)
+    logging.info(f"[GIT] Fetching PR #{pr_number} using GitHub's PR ref...")
+    
     try:
-        run_git_cmd(["fetch", "origin"])
+        # Fetch the PR directly using GitHub's special PR refs
+        # This works without needing to know the branch name
+        run_git_cmd(["fetch", "origin", f"pull/{pr_number}/head"])
         
-        ret = run_git_cmd(["branch", "-r"], check=False)
-        remote_branch = f"origin/{jules_branch}"
-        if remote_branch not in ret.stdout:
-            match = re.search(f"origin/(.*{session_id}.*)", ret.stdout)
-            if match:
-                remote_branch = match.group(0).strip()
-                logging.info(f"[GIT] Found alternative remote branch: {remote_branch}")
-            else:
-                logging.error(f"Could not find remote branch for session {session_id}")
-                return False
-
-        logging.info(f"[GIT] Merging {remote_branch} into {work_branch}...")
-        run_git_cmd(["merge", "--no-edit", remote_branch])
+        logging.info(f"[GIT] Merging PR #{pr_number} into {work_branch}...")
+        run_git_cmd(["merge", "--no-edit", "FETCH_HEAD"])
         return True
     except subprocess.CalledProcessError as e:
-        logging.error(f"Git merge failed: {e.stderr}")
+        logging.error(f"Git fetch/merge failed: {e.stderr}")
         return False
 
 def run_jules_task(
