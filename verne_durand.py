@@ -254,23 +254,48 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
     print()
     return False, "TIMEOUT", None
 
+def safe_get_val(obj: Any, keys: List[str], default: Any = None) -> Any:
+    """Safely gets a value from a dict or object using a list of possible keys/attributes."""
+    if obj is None:
+        return default
+    for key in keys:
+        if isinstance(obj, dict):
+            val = obj.get(key)
+            if val is not None:
+                return val
+        else:
+            val = getattr(obj, key, None)
+            if val is not None:
+                return val
+    return default
+
 def apply_jules_changes(session: Any, work_branch: str) -> bool:
     """
     Applies the changes from Jules by fetching the PR directly using git.
     Uses GitHub's PR ref (refs/pull/NUMBER/head) which doesn't require knowing the branch name.
     """
     outputs = getattr(session, "outputs", [])
-    pr_data = next((o.pull_request for o in outputs if hasattr(o, "pull_request") and o.pull_request), None)
-    if not pr_data:
-        # Fallback if it's still a dict
-        pr_data = next((o.get("pullRequest") or o.get("pull_request") for o in outputs if isinstance(o, dict)), None)
+    pr_data = None
+    
+    for o in outputs:
+        # Check if it's an object with pull_request attribute
+        pr = getattr(o, "pull_request", None)
+        if pr:
+            pr_data = pr
+            break
+        # Check if it's a dict with pullRequest or pull_request key
+        if isinstance(o, dict):
+            pr = o.get("pullRequest") or o.get("pull_request")
+            if pr:
+                pr_data = pr
+                break
     
     if not pr_data:
         logging.error("No Pull Request output found in session. Cannot apply changes automatically yet.")
         return False
 
-    # Get PR URL
-    pr_url = getattr(pr_data, "url", None) if hasattr(pr_data, "url") else pr_data.get("url")
+    # Get PR URL safely
+    pr_url = safe_get_val(pr_data, ["url", "pull_request_url"])
     if not pr_url:
         logging.error("No PR URL found in pull request output")
         return False
@@ -286,8 +311,9 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
     pr_number = match.group(1)
     logging.info(f"[GIT] Fetching PR #{pr_number} using GitHub's PR ref...")
     
-    # Get Branch name (to delete later)
-    branch_name = getattr(pr_data, "branch", None) if hasattr(pr_data, "branch") else pr_data.get("branch")
+    # Get Branch name safely (for deletion later)
+    # Jules SDK might use 'branch', 'branch_name', or 'head_branch'
+    branch_name = safe_get_val(pr_data, ["branch", "branch_name", "head_branch"])
     
     try:
         # Fetch the PR directly using GitHub's special PR refs
