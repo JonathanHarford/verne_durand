@@ -33,7 +33,8 @@ config:
 ---
 flowchart TD
     Start((Start)) --> Init[Initialize: Check JULES_API_KEY, Chdir]
-    Init --> ParsePlan[Parse PLAN.md for Unchecked Tasks]
+    Init --> Ensure[Ensure Work Branch & Initial Push]
+    Ensure --> ParsePlan[Parse PLAN.md for Unchecked Tasks]
     ParsePlan --> HasTasks{Tasks left?}
     
     HasTasks -- No --> Done((Done))
@@ -51,8 +52,12 @@ flowchart TD
     Execution -- SUCCESS --> Push[Git Push Work Branch]
     Push --> HasTasks
     
-    Execution -- FAIL/ERROR --> RetryWait[Wait 10s]
+    Execution -- FAIL/ERROR --> CheckRetry{attempts < 3?}
+
+    CheckRetry -- Yes --> RetryWait[Wait 15s]
     RetryWait --> RetryLoop
+
+    CheckRetry -- No --> RetryLoop
 ```
 
 ### 2. Task Execution Detail (run_jules_task)
