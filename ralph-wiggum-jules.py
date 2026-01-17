@@ -134,6 +134,18 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
         # Initial sleep to avoid race condition immediately after creation
         time.sleep(5)
         
+        status_map = {
+            "STATE_UNSPECIFIED": "?",
+            "QUEUED": "Q",
+            "PLANNING": "P",
+            "AWAITING_PLAN_APPROVAL": "W",
+            "AWAITING_USER_FEEDBACK": "U",
+            "IN_PROGRESS": ".",
+            "PAUSED": "Z",
+            "FAILED": "F",
+            "COMPLETED": "C"
+        }
+        
         while (time.time() - start_time) < timeout:
             try:
                 session = client.sessions.get(session_name)
@@ -146,9 +158,14 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
 
             state = getattr(session, "state", "STATE_UNSPECIFIED")
             
+            # Print character for status
+            print(status_map.get(state, "?"), end="", flush=True)
+            
             if state == "COMPLETED":
+                print()
                 return True, "COMPLETED", session
             if state == "FAILED":
+                print()
                 return False, "FAILED", session
             
             if state == "AWAITING_PLAN_APPROVAL":
@@ -164,6 +181,7 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                     logging.debug(f"New activity detected. Total: {last_act_count}")
                 elif (time.time() - last_act_time) > (STALE_THRESHOLD_MIN * 60):
                     logging.warning(f"Session {session_name} has been stale for > {STALE_THRESHOLD_MIN} minutes. Giving up.")
+                    print()
                     return False, "STALE", None
             except JulesAPIError as e:
                 # If 404, it might just be too early for activities
@@ -174,11 +192,14 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
 
             time.sleep(POLL_INTERVAL_SEC)
     except JulesAPIError as e:
+        print()
         logging.error(f"SDK Error: {e}")
         return False, "ERROR", None
     except Exception as e:
+        print()
         logging.warning(f"Error polling session: {e}")
 
+    print()
     return False, "TIMEOUT", None
 
 def apply_jules_changes(session: Any, work_branch: str) -> bool:
