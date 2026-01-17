@@ -124,9 +124,13 @@ def is_recent(ts_str: Optional[str], threshold_sec: int) -> bool:
 
 # --- JULES INTERACTION ---
 
+def short_id(name: str) -> str:
+    """Returns the short ID from a session name (e.g. 'sessions/123' -> '123')."""
+    return name.split("/")[-1] if "/" in name else name
+
 def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tuple[bool, str, Optional[Any]]:
     """Polls session status until completion or timeout."""
-    logging.info(f"Waiting for session {session_name}...")
+    logging.info(f"Waiting for session {short_id(session_name)}...")
     
     try:
         start_time = time.time()
@@ -153,7 +157,7 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                 session = client.sessions.get(session_name)
             except JulesAPIError as e:
                 if "404" in str(e):
-                    logging.debug(f"Session {session_name} not found yet (transient 404). Retrying...")
+                    logging.debug(f"Session {short_id(session_name)} not found yet (transient 404). Retrying...")
                     time.sleep(2)
                     continue
                 raise e
@@ -171,7 +175,7 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                 return False, "FAILED", session
             
             if state == "AWAITING_PLAN_APPROVAL":
-                logging.info(f"Session {session_name} awaiting plan approval. Approving...")
+                logging.info(f"Session {short_id(session_name)} awaiting plan approval. Approving...")
                 client.sessions.approve_plan(session_name)
             
             # Stale check via activity count
@@ -182,7 +186,7 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                     last_act_time = time.time()
                     logging.debug(f"New activity detected. Total: {last_act_count}")
                 elif (time.time() - last_act_time) > (STALE_THRESHOLD_MIN * 60):
-                    logging.warning(f"Session {session_name} has been stale for > {STALE_THRESHOLD_MIN} minutes. Giving up.")
+                    logging.warning(f"Session {short_id(session_name)} has been stale for > {STALE_THRESHOLD_MIN} minutes. Giving up.")
                     print()
                     return False, "STALE", None
             except JulesAPIError as e:
@@ -276,7 +280,7 @@ def run_jules_task(
     session_name = None
     if active_sessions:
         session_name = active_sessions[0].name
-        logging.info(f"Resuming existing session: {session_name}")
+        logging.info(f"Resuming existing session: {short_id(session_name)}")
     else:
         # 2. Start Session
         full_prompt = (
@@ -305,7 +309,8 @@ def run_jules_task(
         session = Session.from_dict(response)
         
         session_name = session.name
-        logging.info(f"Session started: {session_name}")
+        web_url = getattr(session, "url", "N/A")
+        logging.info(f"Session started: {short_id(session_name)}\nLink: {web_url}")
 
     # 3. Wait
     success, status, session_info = wait_for_session(client, session_name, timeout)
