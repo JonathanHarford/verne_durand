@@ -84,15 +84,22 @@ def ensure_work_branch(target_branch: str) -> None:
     if ret.returncode != 0:
         subprocess.run(["git", "checkout", "-b", target_branch], check=True)
 
-def push_changes(branch: str) -> None:
-    """Pushes the branch to origin if it exists."""
+def push_changes(branch: str, message: str = "Verne Durand: Automated update") -> None:
+    """Stages all changes, commits them, and pushes to origin."""
     try:
+        # Check if there are any changes to commit
+        status = run_git_cmd(["status", "--porcelain"])
+        if status.stdout.strip():
+            logging.info(f"[GIT] Committing changes: {message}")
+            run_git_cmd(["add", "."])
+            run_git_cmd(["commit", "-m", message])
+        
         ret = run_git_cmd(["remote"], check=False)
         if "origin" in ret.stdout:
             logging.info(f"[GIT] Pushing '{branch}' to origin...")
             run_git_cmd(["push", "-u", "origin", branch])
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to push: {e.stderr}")
+        logging.error(f"Git operation failed: {e.stderr}")
 
 def get_repo_slug() -> Optional[str]:
     """Extracts 'owner/repo' from the git remote."""
@@ -439,7 +446,7 @@ def main() -> None:
             if task_status == "todo":
                 if manager.move_to_started(task_name):
                     logging.info(f"Moved task to 'started': {task_name}")
-                    push_changes(args.branch)
+                    push_changes(args.branch, message=f"verne: start task '{task_name[:30]}'")
             
             attempts = 0
             success = False
@@ -452,12 +459,12 @@ def main() -> None:
                     updated_plan = manager.load()
                     if task_name in updated_plan.get("completed", []):
                         logging.info(f"Task '{task_name}' verified as COMPLETED.")
-                        push_changes(args.branch)
+                        push_changes(args.branch, message=f"verne: complete task '{task_name[:30]}'")
                         success = True
                     else:
                         logging.warning(f"Jules submitted changes but did NOT mark '{task_name}' as completed.")
                         logging.info("This likely means Jules considers the task partially finished. Stopping automation for review.")
-                        push_changes(args.branch)
+                        push_changes(args.branch, message=f"verne: partial work for '{task_name[:30]}'")
                         sys.exit(0)
                 else:
                     logging.warning(f"Task failed (Attempt {attempts}). Reason: {status}")
