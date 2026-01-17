@@ -1,5 +1,4 @@
 
-
 ## Verne Durand: Autonomous Jules SDK Harness
 
 This script automates the execution of multiple tasks using the Jules AI agent. It parses a markdown checklist (e.g., `PLAN.md`) and executes unchecked tasks sequentially.
@@ -10,6 +9,10 @@ This script automates the execution of multiple tasks using the Jules AI agent. 
 - **Resilient**: Automatically resumes active sessions or retries failed tasks (up to 3 times).
 - **Auto-Approval**: Detects when a plan requires approval and automatically approves it to maintain autonomy.
 - **Git Integration**: Automatically manages branch creation, remote pushing, and merging Jules' generated changes.
+
+### TODO
+
+* Show link to Jules session in the output
 
 ### Usage
 Run the harness using `uv`:

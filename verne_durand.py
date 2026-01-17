@@ -283,7 +283,7 @@ def run_jules_task(
         full_prompt = (
             f"{task}\n\n"
             f"Use your best judgment, and ask absolutely no questions.\n\n"
-            f"As your final step, update the '{plan_path}' file to mark this task as completed "
+            f"As your final step, if the task is fully completed, update the '{plan_path}' file to mark this task as completed "
             f"by changing '[ ] {task}' to '[x] {task}'. If you inadvertently completed any subsequent tasks, mark them off as well."
         )
         
