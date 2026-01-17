@@ -80,9 +80,10 @@ def configure_logging(verbose: bool = False) -> None:
     root.setLevel(level)
     root.addHandler(handler)
     
-    # Silence third-party logs
-    logging.getLogger("jules_agent_sdk").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    # Silence third-party logs entirely unless CRITICAL
+    logging.getLogger("jules_agent_sdk").setLevel(logging.CRITICAL)
+    logging.getLogger("urllib3").setLevel(logging.CRITICAL)
+    logging.getLogger("google").setLevel(logging.CRITICAL)
 
 # --- GIT HELPERS ---
 
@@ -325,9 +326,11 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
             except:
                 pass
 
-        # Check for completion marker in PR description
+        # Check for completion marker in PR title or description (case-insensitive)
+        pr_title = safe_get_val(pr_data, ["title", "subject"]) or ""
         pr_desc = safe_get_val(pr_data, ["description", "body"]) or ""
-        is_marked_done = "[DONE]" in pr_desc
+        full_text = f"{pr_title}\n{pr_desc}".upper()
+        is_marked_done = "[DONE]" in full_text
         
         return True, is_marked_done
     except subprocess.CalledProcessError as e:
@@ -519,33 +522,31 @@ def main() -> None:
     ensure_work_branch(args.branch)
     push_changes(args.branch)
 
-    tasks, total_count, initial_completed = parse_plan(args.plan)
-    if not tasks:
-        logging.info("No tasks to perform.")
-        sys.exit(0)
+    # Initialize manager
+    manager = PlanManager(args.plan)
 
     try:
-        # Re-initialize manager here to be safe
-        manager = PlanManager(args.plan)
+        while True:
+            # Re-parse plan every iteration to pick up external/Jules updates
+            tasks, total_count, completed_count = parse_plan(args.plan)
+            if not tasks:
+                logging.info("All tasks completed.")
+                break
 
-        for i, task_data in enumerate(tasks):
+            # Always pick the first available task (started first, then todo)
+            task_data = tasks[0]
             task_name = task_data["task"]
             task_status = task_data["status"]
 
-            # Use total_completed + current index for correct numbering
-            current_idx = initial_completed + i + 1
-            
-            # Transition logic for display
-            display_status = f"{initial_completed + i + 1}/{total_count} ({task_status if task_status != 'todo' else 'todo->started'})"
-            
+            # Display status
+            display_status = f"{completed_count + 1}/{total_count}"
+            status_text = f"{task_status if task_status != 'todo' else 'todo->started'}"
+            logging.info(f"Task {display_status} ({status_text}):")
+            logging.info(f"{task_name}")
+
             if task_status == "todo":
                 if manager.move_to_started(task_name):
-                    logging.info(f"Task {display_status}:")
-                    logging.info(f"{task_name}")
                     push_changes(args.branch, message=f"verne: start task '{task_name[:30]}'")
-            else:
-                logging.info(f"Task {display_status}:")
-                logging.info(f"{task_name}")
             
             attempts = 0
             success = False
@@ -556,24 +557,23 @@ def main() -> None:
                 if task_success:
                     if is_marked_done:
                         if manager.move_to_completed(task_name):
-                            logging.info(f"Task '{task_name}' verified as COMPLETED.")
+                            logging.info(f"Task verified as COMPLETED.")
                             push_changes(args.branch, message=f"verne: complete task '{task_name[:30]}'")
                         success = True
                     else:
-                        logging.warning(f"Jules submitted changes but did NOT mark '{task_name}' as completed (Partial work).")
-                        logging.info("Pushing partial work and continuing to the next task.")
+                        logging.warning(f"Jules submitted changes but did NOT mark task as completed (Partial work).")
+                        logging.info("Pushing partial work and continuing.")
                         push_changes(args.branch, message=f"verne: partial work for '{task_name[:30]}'")
-                        success = True # Move to next task
+                        success = True # Move to next task cycle
                 else:
-                    logging.warning(f"Task failed (Attempt {attempts}). Reason: {status}")
+                    logging.warning(f"Task failed (Attempt {attempts}).")
                     if attempts < MAX_RETRIES: 
                         time.sleep(RETRY_DELAY_SEC)
 
             if not success:
-                logging.error(f"CRITICAL FAILURE: Task '{task_name}' failed after {MAX_RETRIES} attempts.")
+                logging.error(f"CRITICAL FAILURE: Task failed after {MAX_RETRIES} attempts.")
                 sys.exit(1)
 
-        logging.info("All tasks completed.")
     finally:
         client.close()
 

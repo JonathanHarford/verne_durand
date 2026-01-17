@@ -79,7 +79,7 @@ flowchart TD
     Verify -- Yes --> Push[Git Push Work Branch]
     Push --> HasTasks
     
-    Verify -- No --> PushPartial[Push Partial Work Branch]
+    Verify -- No --> PushPartial[Git Push Partial Work]
     PushPartial --> HasTasks
     
     Execution -. FAIL/ERROR .-> CheckRetry{attempts < 3?}
@@ -126,7 +126,10 @@ flowchart TD
 
 ## Prompt Template
 
-Jules is instructed to use a specific tool to mark tasks as completed. This ensures that the YAML file is updated reliably and that Jules makes an explicit "executive decision" on whether a task is truly finished.
+Jules signaled task completion by including a specific marker in the Pull Request title or description. This ensures that the YAML file is updated reliably only when Jules explicitly confirms the work is finished.
+
+- **Completion Marker**: `[DONE]` (case-insensitive)
+- **Natural Signaling**: Jules just needs to mention `[DONE]` in its PR description.
 
 ```markdown
 {task}
