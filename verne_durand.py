@@ -79,6 +79,10 @@ def configure_logging(verbose: bool = False) -> None:
     root = logging.getLogger()
     root.setLevel(level)
     root.addHandler(handler)
+    
+    # Silence third-party logs
+    logging.getLogger("jules_agent_sdk").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # --- GIT HELPERS ---
 
@@ -118,10 +122,18 @@ def ensure_work_branch(target_branch: str) -> None:
     current = get_current_branch()
     if current == target_branch:
         return
-    logging.info(f"git checkout '{target_branch}'")
-    ret = subprocess.run(["git", "checkout", target_branch], capture_output=True)
-    if ret.returncode != 0:
-        subprocess.run(["git", "checkout", "-b", target_branch], check=True)
+    
+    # Check if branch exists
+    ret = subprocess.run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{target_branch}"])
+    is_new = ret.returncode != 0
+    
+    suffix = " # New branch" if is_new else ""
+    logging.info(f"git checkout '{target_branch}'{suffix}")
+    
+    if is_new:
+        subprocess.run(["git", "checkout", "-b", target_branch], check=True, capture_output=True)
+    else:
+        subprocess.run(["git", "checkout", target_branch], check=True, capture_output=True)
 
 def push_changes(branch: str, message: str = "Verne Durand: Automated update") -> None:
     """Stages all changes, commits them, and pushes to origin."""
@@ -176,7 +188,6 @@ def short_id(name: str) -> str:
 
 def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tuple[bool, str, Optional[Any]]:
     """Polls session status until completion or timeout."""
-    logging.info(f"Waiting for session {short_id(session_name)}...")
     
     try:
         start_time = time.time()
@@ -201,55 +212,42 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
         while (time.time() - start_time) < timeout:
             try:
                 session = client.sessions.get(session_name)
-            except JulesAPIError as e:
-                if "404" in str(e):
-                    logging.debug(f"Session {short_id(session_name)} not found yet (transient 404). Retrying...")
-                    time.sleep(2)
-                    continue
-                raise e
-
-            state = getattr(session, "state", "STATE_UNSPECIFIED")
-            
-            # Print character for status
-            print(status_map.get(state, "?"), end="", flush=True)
-            
-            if state == "COMPLETED":
-                print()
-                return True, "COMPLETED", session
-            if state == "FAILED":
-                print()
-                return False, "FAILED", session
-            
-            if state == "AWAITING_PLAN_APPROVAL":
-                logging.info(f"Session {short_id(session_name)} awaiting plan approval. Approving...")
-                client.sessions.approve_plan(session_name)
-            
-            # Stale check via activity count
-            try:
-                activities = client.activities.list_all(session_name)
-                if len(activities) > last_act_count:
-                    last_act_count = len(activities)
-                    last_act_time = time.time()
-                    logging.debug(f"New activity detected. Total: {last_act_count}")
-                elif (time.time() - last_act_time) > (STALE_THRESHOLD_MIN * 60):
-                    logging.warning(f"Session {short_id(session_name)} has been stale for > {STALE_THRESHOLD_MIN} minutes. Giving up.")
+                state = getattr(session, "state", "STATE_UNSPECIFIED")
+                
+                # Print character for status
+                print(status_map.get(state, "?"), end="", flush=True)
+                
+                if state == "COMPLETED":
+                    print()
+                    return True, "COMPLETED", session
+                if state == "FAILED":
+                    print()
+                    return False, "FAILED", session
+                
+                if state == "AWAITING_PLAN_APPROVAL":
+                    client.sessions.approve_plan(session_name)
+                
+                # Stale check via activity count
+                try:
+                    activities = client.activities.list_all(session_name)
+                    if len(activities) > last_act_count:
+                        last_act_count = len(activities)
+                        last_act_time = time.time()
+                except:
+                    pass
+                
+                if (time.time() - last_act_time) > (STALE_THRESHOLD_MIN * 60):
+                    logging.warning(f"Session {short_id(session_name)} stale. Giving up.")
                     print()
                     return False, "STALE", None
-            except JulesAPIError as e:
-                # If 404, it might just be too early for activities
-                if "404" in str(e):
-                    logging.debug("Activity list returned 404 (possibly too early). Continuing...")
-                else:
-                    raise e
 
-            time.sleep(POLL_INTERVAL_SEC)
-    except JulesAPIError as e:
-        print()
-        logging.error(f"SDK Error: {e}")
-        return False, "ERROR", None
-    except Exception as e:
-        print()
-        logging.warning(f"Error polling session: {e}")
+                time.sleep(POLL_INTERVAL_SEC)
+            except (JulesAPIError, Exception):
+                # Recoverable/transient error in the loop
+                print("?", end="", flush=True)
+                time.sleep(POLL_INTERVAL_SEC)
+    except Exception:
+        return False, "TIMEOUT", None
 
     print()
     return False, "TIMEOUT", None
@@ -300,7 +298,9 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
         logging.error("No PR URL found in pull request output")
         return False
     
-    logging.info(f"[PR] {pr_url}")
+    # Get Branch name safely (for deletion later)
+    # Jules SDK might use 'branch', 'branch_name', or 'head_branch'
+    branch_name = safe_get_val(pr_data, ["branch", "branch_name", "head_branch"])
     
     # Extract PR number from URL (e.g., https://github.com/owner/repo/pull/123)
     match = re.search(r"/pull/(\d+)", pr_url)
@@ -309,28 +309,21 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
         return False
     
     pr_number = match.group(1)
-    logging.info(f"[GIT] Fetching PR #{pr_number} using GitHub's PR ref...")
-    
-    # Get Branch name safely (for deletion later)
-    # Jules SDK might use 'branch', 'branch_name', or 'head_branch'
-    branch_name = safe_get_val(pr_data, ["branch", "branch_name", "head_branch"])
     
     try:
-        # Fetch the PR directly using GitHub's special PR refs
-        # This works without needing to know the branch name
+        logging.info(f"git fetch origin pull/{pr_number}/head")
         run_git_cmd(["fetch", "origin", f"pull/{pr_number}/head"])
         
-        logging.info(f"[GIT] Merging PR #{pr_number} into {work_branch}...")
+        logging.info(f"git merge --no-edit FETCH_HEAD")
         run_git_cmd(["merge", "--no-edit", "FETCH_HEAD"])
 
         # Delete the remote branch now that it's merged
         if branch_name:
-            logging.info(f"[GIT] Deleting remote branch '{branch_name}'...")
+            logging.info(f"git push origin --delete {branch_name}")
             try:
                 run_git_cmd(["push", "origin", "--delete", branch_name])
-            except subprocess.CalledProcessError as e:
-                # Often branches are auto-deleted by GitHub if configured, so we don't treat failure as fatal
-                logging.debug(f"Remote branch deletion failed (possibly already deleted): {e.stderr}")
+            except:
+                pass
         
         return True
     except subprocess.CalledProcessError as e:
@@ -378,7 +371,7 @@ def run_jules_task(
             logging.error(f"Failed to load prompt template: {e}")
             return False, "PROMPT_LOAD_FAILED"
         
-        logging.info(f"Starting new Jules session for: '{task}'")
+        # 2. Start Session (Load prompt from template)
         # Use raw POST to support automationMode which is missing in high-level SDK
         data = {
             "prompt": full_prompt,
@@ -525,12 +518,16 @@ def main() -> None:
             current_idx = initial_completed + i + 1
             
             # Transition logic for display
+            display_status = f"{initial_completed + i + 1}/{total_count} ({task_status if task_status != 'todo' else 'todo->started'})"
+            
             if task_status == "todo":
                 if manager.move_to_started(task_name):
-                    logging.info(f"Task {current_idx}/{total_count} (todo->started): {task_name}")
+                    logging.info(f"Task {display_status}:")
+                    logging.info(f"{task_name}")
                     push_changes(args.branch, message=f"verne: start task '{task_name[:30]}'")
             else:
-                logging.info(f"Task {current_idx}/{total_count} ({task_status}): {task_name}")
+                logging.info(f"Task {display_status}:")
+                logging.info(f"{task_name}")
             
             attempts = 0
             success = False
