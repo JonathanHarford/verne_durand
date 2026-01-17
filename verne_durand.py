@@ -136,20 +136,51 @@ def ensure_work_branch(target_branch: str) -> None:
     else:
         subprocess.run(["git", "checkout", target_branch], check=True, capture_output=True)
 
-def push_changes(branch: str, message: str = "Verne Durand: Automated update") -> None:
-    """Stages all changes, commits them, and pushes to origin."""
+def push_changes(branch: str, plan_path: Optional[str] = None, message: str = "Verne Durand: Automated update") -> None:
+    """
+    Stages all changes, commits them, and pushes to origin.
+    If only the plan file is modified and the previous commit was also an automated update,
+    it will --amend the commit to reduce history noise.
+    """
     try:
         # Check if there are any changes to commit
-        status = run_git_cmd(["status", "--porcelain"])
-        if status.stdout.strip():
-            logging.info("git commit")
-            run_git_cmd(["add", "."])
+        status_proc = run_git_cmd(["status", "--porcelain"])
+        status_out = status_proc.stdout.strip()
+        if not status_out:
+            # Check if we need to push anyway (e.g. initial setup)
+            remote_proc = run_git_cmd(["remote"], check=False)
+            if "origin" in remote_proc.stdout:
+                run_git_cmd(["push", "-u", "origin", branch], check=False)
+            return
+
+        # Determine if we should amend
+        should_amend = False
+        if plan_path:
+            abs_plan = os.path.basename(os.path.abspath(plan_path))
+            changed_files = [line[3:].strip() for line in status_out.split("\n")]
+            # If ONLY the plan file is changed
+            if len(changed_files) == 1 and abs_plan in changed_files[0]:
+                # Check if previous commit was also a verne update
+                last_msg_proc = run_git_cmd(["log", "-1", "--pretty=%s"], check=False)
+                last_msg = last_msg_proc.stdout.strip()
+                if last_msg.startswith("verne:") or last_msg.startswith("Verne Durand:"):
+                    should_amend = True
+
+        run_git_cmd(["add", "."])
+        if should_amend:
+            logging.info("git commit --amend (checklist update)")
+            run_git_cmd(["commit", "--amend", "--no-edit"])
+        else:
+            logging.info(f"git commit -m '{message}'")
             run_git_cmd(["commit", "-m", message])
         
         ret = run_git_cmd(["remote"], check=False)
         if "origin" in ret.stdout:
-            logging.info(f"git push '{branch}' origin")
-            run_git_cmd(["push", "-u", "origin", branch])
+            logging.info(f"git push '{branch}' origin (force={should_amend})")
+            if should_amend:
+                run_git_cmd(["push", "--force-with-lease", "origin", branch])
+            else:
+                run_git_cmd(["push", "-u", "origin", branch])
     except subprocess.CalledProcessError as e:
         logging.error(f"Git operation failed: {e.stderr}")
 
@@ -520,7 +551,7 @@ def main() -> None:
 
     # Initialize Git
     ensure_work_branch(args.branch)
-    push_changes(args.branch)
+    push_changes(args.branch, plan_path=args.plan)
 
     # Initialize manager
     manager = PlanManager(args.plan)
@@ -546,7 +577,7 @@ def main() -> None:
 
             if task_status == "todo":
                 if manager.move_to_started(task_name):
-                    push_changes(args.branch, message=f"verne: start task '{task_name[:30]}'")
+                    push_changes(args.branch, plan_path=args.plan, message=f"verne: start task '{task_name[:30]}'")
             
             attempts = 0
             success = False
@@ -558,12 +589,12 @@ def main() -> None:
                     if is_marked_done:
                         if manager.move_to_completed(task_name):
                             logging.info(f"Task verified as COMPLETED.")
-                            push_changes(args.branch, message=f"verne: complete task '{task_name[:30]}'")
+                            push_changes(args.branch, plan_path=args.plan, message=f"verne: complete task '{task_name[:30]}'")
                         success = True
                     else:
                         logging.warning(f"Jules submitted changes but did NOT mark task as completed (Partial work).")
                         logging.info("Pushing partial work and continuing.")
-                        push_changes(args.branch, message=f"verne: partial work for '{task_name[:30]}'")
+                        push_changes(args.branch, plan_path=args.plan, message=f"verne: partial work for '{task_name[:30]}'")
                         success = True # Move to next task cycle
                 else:
                     logging.warning(f"Task failed (Attempt {attempts}).")
