@@ -7,7 +7,8 @@ This script automates the execution of multiple tasks using the Jules AI agent. 
 - **`uv` Ready**: Includes inline dependency metadata for zero-setup execution.
 - **Resilient**: Automatically resumes active sessions or retries failed tasks (up to 3 times).
 - **Auto-Approval**: Detects when a plan requires approval and automatically approves it to maintain autonomy.
-- **Git Integration**: Automatically manages branch creation, remote pushing, and merging Jules' generated changes.
+- **Git Integration**: Automatically manages branch creation, remote pushing, merging Jules' changes, and **cleaning up transient branches** after work is applied.
+- **Atomic Updates**: Automatically commits and pushes plan updates (e.g. moving tasks to `started`) before Jules begins work.
 
 ## TODO
 
@@ -113,11 +114,13 @@ flowchart TD
     subgraph "Apply Changes"
       CheckOutputs --> FetchPR[Git Fetch PR]
       FetchPR --> Merge[Git Merge FETCH_HEAD]
+      Merge --> DeleteBranch[Delete Remote Jules Branch]
     end
-    Merge --> MergeSuccess((SUCCESS))
+    DeleteBranch --> MergeSuccess((SUCCESS))
     FetchPR -.-> ReturnFail
     CheckOutputs -.-> ReturnFail
     Merge -.-> ReturnFail
+    DeleteBranch -.-> MergeSuccess
 ```
 
 ## Prompt Template
