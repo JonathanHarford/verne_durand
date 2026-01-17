@@ -1,0 +1,4 @@
+#!/bin/bash
+# Sync the prompt template to README.md before committing
+python3 tools/sync_prompt.py
+git add README.md

@@ -1,4 +1,4 @@
-## Verne Durand: Autonomous Jules SDK Harness
+# Verne Durand: Autonomous Jules SDK Harness
 
 This script automates the execution of multiple tasks using the Jules AI agent. It parses a YAML checklist (e.g., `PLAN.yaml`) and executes tasks in the `todo` and `started` lists sequentially.
 
@@ -9,11 +9,11 @@ This script automates the execution of multiple tasks using the Jules AI agent. 
 - **Auto-Approval**: Detects when a plan requires approval and automatically approves it to maintain autonomy.
 - **Git Integration**: Automatically manages branch creation, remote pushing, and merging Jules' generated changes.
 
-### TODO
+## TODO
 
 * Parallel task execution
 
-### Usage
+## Usage
 Run the harness using `uv`. The plan file is a YAML file specific to the project you are working on, usually located at the root of that project.
 
 ```bash
@@ -22,7 +22,16 @@ export JULES_API_KEY="your-api-key"
 uv run verne_durand.py --plan PLAN.yaml --project /path/to/project
 ```
 
-### Checklist Format (`PLAN.yaml`)
+## Development
+
+### Git Hooks
+To keep the `README.md` and `prompt_template.txt` in sync, this project uses a git hook. To enable it, run:
+```bash
+git config core.hooksPath .githooks
+```
+This will run `tools/sync_prompt.py` automatically before every commit.
+
+## Checklist Format (`PLAN.yaml`)
 The checklist is a YAML file with the following structure:
 ```yaml
 todo:
@@ -32,7 +41,7 @@ started: []
 completed: []
 ```
 
-### Flow Architecture
+## Flow Architecture
 
 ### 1. Main Orchestration Loop
 ```mermaid
@@ -98,17 +107,23 @@ flowchart TD
     Status -. FAILED/ERROR .-> ReturnFail((FAIL))
     Status -- COMPLETED --> CheckOutputs[Get PR ID from Session]
     subgraph "Apply Changes"
-    CheckOutputs --> FetchPR[Git Fetch PR]
-    
-    
-    
-    FetchPR --> Merge[Git Merge FETCH_HEAD]
-    
+      CheckOutputs --> FetchPR[Git Fetch PR]
+      FetchPR --> Merge[Git Merge FETCH_HEAD]
     end
     Merge --> MergeSuccess((SUCCESS))
     FetchPR -.-> ReturnFail
     CheckOutputs -.-> ReturnFail
     Merge -.-> ReturnFail
+```
+
+## Prompt
+
+```markdown
+{task}
+
+Use your best judgment, and ask absolutely no questions.
+
+As your final step, if the task is fully completed, update the '{plan_path}' file to mark this task as completed by moving '{task}' from the 'started' list to the 'completed' list. If you inadvertently completed any subsequent tasks, move them to 'completed' as well.
 ```
 
 ## The Name

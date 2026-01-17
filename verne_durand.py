@@ -282,14 +282,16 @@ def run_jules_task(
         session_name = active_sessions[0].name
         logging.info(f"Resuming existing session: {short_id(session_name)}")
     else:
-        # 2. Start Session
-        full_prompt = (
-            f"{task}\n\n"
-            f"Use your best judgment, and ask absolutely no questions.\n\n"
-            f"As your final step, if the task is fully completed, update the '{plan_path}' file to mark this task as completed "
-            f"by moving '{task}' from the 'started' list to the 'completed' list. "
-            f"If you inadvertently completed any subsequent tasks, move them to 'completed' as well."
-        )
+        # 2. Start Session (Load prompt from template)
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            template_path = os.path.join(script_dir, "prompt_template.txt")
+            with open(template_path, "r") as f:
+                template = f.read().strip()
+            full_prompt = template.format(task=task, plan_path=plan_path)
+        except Exception as e:
+            logging.error(f"Failed to load prompt template: {e}")
+            return False, "PROMPT_LOAD_FAILED"
         
         logging.info(f"Starting new Jules session for: '{task}'")
         # Use raw POST to support automationMode which is missing in high-level SDK

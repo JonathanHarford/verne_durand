@@ -1,0 +1,5 @@
+{task}
+
+Use your best judgment, and ask absolutely no questions.
+
+As your final step, if the task is fully completed, update the '{plan_path}' file to mark this task as completed by moving '{task}' from the 'started' list to the 'completed' list. If you inadvertently completed any subsequent tasks, move them to 'completed' as well.
