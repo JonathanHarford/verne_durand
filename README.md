@@ -15,6 +15,7 @@ This script automates the execution of multiple tasks using the Jules AI agent. 
 * Show link to Jules session in the output
 * Use YAML for checklist
 * Split diagram into 2
+* Simultaneous tasks
 
 ### Usage
 Run the harness using `uv`:
