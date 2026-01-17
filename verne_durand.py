@@ -3,6 +3,7 @@
 # dependencies = [
 #   "jules-agent-sdk",
 #   "python-dotenv",
+#   "PyYAML",
 # ]
 # ///
 
@@ -13,6 +14,7 @@ import re
 import subprocess
 import sys
 import time
+import yaml
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict, Any
 from dotenv import load_dotenv
@@ -284,7 +286,8 @@ def run_jules_task(
             f"{task}\n\n"
             f"Use your best judgment, and ask absolutely no questions.\n\n"
             f"As your final step, if the task is fully completed, update the '{plan_path}' file to mark this task as completed "
-            f"by changing '[ ] {task}' to '[x] {task}'. If you inadvertently completed any subsequent tasks, mark them off as well."
+            f"by moving '{task}' from the 'started' list to the 'completed' list. "
+            f"If you inadvertently completed any subsequent tasks, move them to 'completed' as well."
         )
         
         logging.info(f"Starting new Jules session for: '{task}'")
@@ -320,24 +323,66 @@ def run_jules_task(
 
 # --- CORE LOGIC ---
 
-def parse_plan(plan_path: str) -> Tuple[List[Tuple[int, str]], int]:
+class PlanManager:
+    def __init__(self, filepath: str):
+        self.filepath = filepath
+
+    def load(self) -> Dict[str, List[str]]:
+        if not os.path.exists(self.filepath):
+             return {"todo": [], "started": [], "completed": []}
+        with open(self.filepath, 'r') as f:
+            data = yaml.safe_load(f) or {}
+        return {
+            "todo": data.get("todo") or [],
+            "started": data.get("started") or [],
+            "completed": data.get("completed") or []
+        }
+
+    def save(self, data: Dict[str, List[str]]) -> None:
+        with open(self.filepath, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False)
+
+    def get_pending_tasks(self) -> List[Dict[str, str]]:
+        """Returns a list of tasks that are either in started or todo."""
+        data = self.load()
+        tasks = []
+        for t in data["started"]:
+            tasks.append({"task": t, "status": "started"})
+        for t in data["todo"]:
+            tasks.append({"task": t, "status": "todo"})
+        return tasks
+
+    def get_total_count(self) -> int:
+        data = self.load()
+        return len(data["started"]) + len(data["todo"]) + len(data["completed"])
+
+    def move_to_started(self, task: str) -> bool:
+        data = self.load()
+        # Ensure structure
+        if "todo" not in data: data["todo"] = []
+        if "started" not in data: data["started"] = []
+        if "completed" not in data: data["completed"] = []
+
+        if task in data["todo"]:
+            data["todo"].remove(task)
+            if task not in data["started"]:
+                data["started"].append(task)
+            self.save(data)
+            return True
+        elif task in data["started"]:
+            return False
+        else:
+            return False
+
+def parse_plan(plan_path: str) -> Tuple[List[Dict[str, str]], int]:
+    manager = PlanManager(plan_path)
     if not os.path.exists(plan_path):
-        logging.error(f"Plan file not found: {os.path.abspath(plan_path)}")
-        sys.exit(1)
+         logging.error(f"Plan file not found: {os.path.abspath(plan_path)}")
+         sys.exit(1)
 
-    with open(plan_path, "r") as f:
-        lines = f.readlines()
-
-    pending_tasks = []
-    all_task_count = 0
-    for i, line in enumerate(lines):
-        if re.match(r"^\s*[-*]\s*\[[ x]\]\s+(.*)", line):
-            all_task_count += 1
-            match = re.match(r"^\s*[-*]\s*\[ \]\s+(.*)", line)
-            if match:
-                pending_tasks.append((all_task_count, match.group(1).strip()))
-
-    return pending_tasks, all_task_count
+    pending_tasks = manager.get_pending_tasks()
+    total_count = manager.get_total_count()
+    return pending_tasks, total_count
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verne Durand: Autonomous Jules SDK Harness")
@@ -375,14 +420,28 @@ def main() -> None:
         sys.exit(0)
 
     try:
-        for i, (abs_idx, task) in enumerate(tasks):
-            logging.info(f"--- Task {abs_idx}/{total_count}: {task} ---")
+        # Re-initialize manager here to be safe
+        manager = PlanManager(args.plan)
+
+        for i, task_data in enumerate(tasks):
+            task_name = task_data["task"]
+            task_status = task_data["status"]
+
+            # Use 1-based index for display, relative to total tasks
+            current_idx = i + 1
+            logging.info(f"--- Task {current_idx}/{total_count}: {task_name} ({task_status}) ---")
+
+            # If task is todo, move to started
+            if task_status == "todo":
+                if manager.move_to_started(task_name):
+                    logging.info(f"Moved task to 'started': {task_name}")
+                    push_changes(args.branch)
             
             attempts = 0
             success = False
             while attempts < MAX_RETRIES and not success:
                 attempts += 1
-                task_success, status = run_jules_task(client, task, ".", args.timeout, args.branch, args.plan)
+                task_success, status = run_jules_task(client, task_name, ".", args.timeout, args.branch, args.plan)
                 
                 if task_success:
                     push_changes(args.branch)
@@ -394,7 +453,7 @@ def main() -> None:
                         time.sleep(RETRY_DELAY_SEC)
 
             if not success:
-                logging.error(f"CRITICAL FAILURE: Task '{task}' failed after {MAX_RETRIES} attempts.")
+                logging.error(f"CRITICAL FAILURE: Task '{task_name}' failed after {MAX_RETRIES} attempts.")
                 sys.exit(1)
 
         logging.info("All tasks completed.")
