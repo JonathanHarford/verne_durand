@@ -31,15 +31,54 @@ AUTOMATION_MODE = "AUTO_CREATE_PR"   # Jules behavior (AUTO_CREATE_PR results in
 POLL_INTERVAL_SEC = 30         # Seconds between polling the Jules API for status updates
 RETRY_DELAY_SEC = 15           # Seconds to wait between retries of a failed task
 
+class ColorFormatter(logging.Formatter):
+    """Custom formatter to add ANSI colors to logs."""
+    GREY = "\x1b[38;20m"
+    YELLOW = "\x1b[33;20m"
+    RED = "\x1b[31;20m"
+    BOLD_RED = "\x1b[31;1m"
+    GREEN = "\x1b[32;20m"
+    CYAN = "\x1b[36;20m"
+    RESET = "\x1b[0m"
+    
+    FORMAT = "[%(asctime)s] [%(levelname)s] %(message)s"
+
+    LEVEL_COLORS = {
+        "I": GREY,
+        "W": YELLOW,
+        "E": RED,
+        "D": CYAN
+    }
+
+    def format(self, record):
+        log_fmt = self.LEVEL_COLORS.get(record.levelname, self.RESET) + self.FORMAT + self.RESET
+        
+        # Special coloring for specific message patterns
+        if "git " in record.msg:
+            record.msg = f"{self.CYAN}{record.msg}{self.RESET}"
+        elif "verified as COMPLETED" in record.msg:
+            record.msg = f"{self.GREEN}{record.msg}{self.RESET}"
+        elif "todo->started" in record.msg:
+            # Highlight the status transition in yellow
+            record.msg = record.msg.replace("(todo->started)", f"{self.YELLOW}(todo->started){self.RESET}")
+
+        formatter = logging.Formatter(log_fmt, datefmt="%H:%M:%S")
+        return formatter.format(record)
+
 def configure_logging(verbose: bool = False) -> None:
     """Configures the logging module."""
+    logging.addLevelName(logging.INFO, "I")
+    logging.addLevelName(logging.WARNING, "W")
+    logging.addLevelName(logging.ERROR, "E")
+    logging.addLevelName(logging.DEBUG, "D")
+    
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="[%(asctime)s] [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-        stream=sys.stderr
-    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(ColorFormatter())
+    
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.addHandler(handler)
 
 # --- GIT HELPERS ---
 
@@ -79,7 +118,7 @@ def ensure_work_branch(target_branch: str) -> None:
     current = get_current_branch()
     if current == target_branch:
         return
-    logging.info(f"[GIT] Switching to '{target_branch}'")
+    logging.info(f"git checkout '{target_branch}'")
     ret = subprocess.run(["git", "checkout", target_branch], capture_output=True)
     if ret.returncode != 0:
         subprocess.run(["git", "checkout", "-b", target_branch], check=True)
@@ -90,13 +129,13 @@ def push_changes(branch: str, message: str = "Verne Durand: Automated update") -
         # Check if there are any changes to commit
         status = run_git_cmd(["status", "--porcelain"])
         if status.stdout.strip():
-            logging.info(f"[GIT] Committing changes: {message}")
+            logging.info("git commit")
             run_git_cmd(["add", "."])
             run_git_cmd(["commit", "-m", message])
         
         ret = run_git_cmd(["remote"], check=False)
         if "origin" in ret.stdout:
-            logging.info(f"[GIT] Pushing '{branch}' to origin...")
+            logging.info(f"git push '{branch}' origin")
             run_git_cmd(["push", "-u", "origin", branch])
     except subprocess.CalledProcessError as e:
         logging.error(f"Git operation failed: {e.stderr}")
@@ -332,7 +371,7 @@ def run_jules_task(
         
         session_name = session.name
         web_url = getattr(session, "url", "N/A")
-        logging.info(f"Session started: {short_id(session_name)}\nLink: {web_url}")
+        logging.info(f"Jules session started: {web_url}")
 
     # 3. Wait
     success, status, session_info = wait_for_session(client, session_name, timeout)
@@ -376,6 +415,10 @@ class PlanManager:
             tasks.append({"task": t, "status": "todo"})
         return tasks
 
+    def get_completed_count(self) -> int:
+        data = self.load()
+        return len(data.get("completed", []))
+
     def get_total_count(self) -> int:
         data = self.load()
         return len(data["started"]) + len(data["todo"]) + len(data["completed"])
@@ -398,7 +441,7 @@ class PlanManager:
         else:
             return False
 
-def parse_plan(plan_path: str) -> Tuple[List[Dict[str, str]], int]:
+def parse_plan(plan_path: str) -> Tuple[List[Dict[str, str]], int, int]:
     manager = PlanManager(plan_path)
     if not os.path.exists(plan_path):
          logging.error(f"Plan file not found: {os.path.abspath(plan_path)}")
@@ -406,7 +449,8 @@ def parse_plan(plan_path: str) -> Tuple[List[Dict[str, str]], int]:
 
     pending_tasks = manager.get_pending_tasks()
     total_count = manager.get_total_count()
-    return pending_tasks, total_count
+    completed_count = manager.get_completed_count()
+    return pending_tasks, total_count, completed_count
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verne Durand: Autonomous Jules SDK Harness")
@@ -438,7 +482,7 @@ def main() -> None:
     ensure_work_branch(args.branch)
     push_changes(args.branch)
 
-    tasks, total_count = parse_plan(args.plan)
+    tasks, total_count, initial_completed = parse_plan(args.plan)
     if not tasks:
         logging.info("No tasks to perform.")
         sys.exit(0)
@@ -451,15 +495,16 @@ def main() -> None:
             task_name = task_data["task"]
             task_status = task_data["status"]
 
-            # Use 1-based index for display, relative to total tasks
-            current_idx = i + 1
-            logging.info(f"--- Task {current_idx}/{total_count}: {task_name} ({task_status}) ---")
-
-            # If task is todo, move to started
+            # Use total_completed + current index for correct numbering
+            current_idx = initial_completed + i + 1
+            
+            # Transition logic for display
             if task_status == "todo":
                 if manager.move_to_started(task_name):
-                    logging.info(f"Moved task to 'started': {task_name}")
+                    logging.info(f"Task {current_idx}/{total_count} (todo->started): {task_name}")
                     push_changes(args.branch, message=f"verne: start task '{task_name[:30]}'")
+            else:
+                logging.info(f"Task {current_idx}/{total_count} ({task_status}): {task_name}")
             
             attempts = 0
             success = False
