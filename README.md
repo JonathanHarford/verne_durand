@@ -1,7 +1,6 @@
-
 ## Verne Durand: Autonomous Jules SDK Harness
 
-This script automates the execution of multiple tasks using the Jules AI agent. It parses a markdown checklist (e.g., `PLAN.md`) and executes unchecked tasks sequentially.
+This script automates the execution of multiple tasks using the Jules AI agent. It parses a YAML checklist (e.g., `PLAN.yaml`) and executes tasks in the `todo` and `started` lists sequentially.
 
 ### Key Features
 - **SDK-Based**: Uses the official `jules-agent-sdk`, ensuring robust communication and automatic retries.
@@ -12,15 +11,25 @@ This script automates the execution of multiple tasks using the Jules AI agent. 
 
 ### TODO
 
-* Show link to Jules session in the output
-* Use YAML for checklist
-* Simultaneous tasks
+* Parallel task execution
 
 ### Usage
-Run the harness using `uv`:
+Run the harness using `uv`. The plan file is a YAML file specific to the project you are working on, usually located at the root of that project.
+
 ```bash
 export JULES_API_KEY="your-api-key"
-uv run verne_durand.py --plan PLAN.md --project /path/to/project
+# If PLAN.yaml is in the project root:
+uv run verne_durand.py --plan PLAN.yaml --project /path/to/project
+```
+
+### Checklist Format (`PLAN.yaml`)
+The checklist is a YAML file with the following structure:
+```yaml
+todo:
+  - "Implement feature A"
+  - "Fix bug B"
+started: []
+completed: []
 ```
 
 ### Flow Architecture
@@ -34,7 +43,7 @@ config:
 flowchart TD
     Start((Start)) --> Init[Initialize: Check JULES_API_KEY, Chdir]
     Init --> Ensure[Ensure Work Branch & Initial Push]
-    Ensure --> ParsePlan[Parse PLAN.md for Unchecked Tasks]
+    Ensure --> ParsePlan[Parse PLAN.yaml for Pending Tasks]
     ParsePlan --> HasTasks{Tasks left?}
     
     HasTasks -- No --> Done((Done))
