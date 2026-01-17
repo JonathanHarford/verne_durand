@@ -247,6 +247,9 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
     pr_number = match.group(1)
     logging.info(f"[GIT] Fetching PR #{pr_number} using GitHub's PR ref...")
     
+    # Get Branch name (to delete later)
+    branch_name = getattr(pr_data, "branch", None) if hasattr(pr_data, "branch") else pr_data.get("branch")
+    
     try:
         # Fetch the PR directly using GitHub's special PR refs
         # This works without needing to know the branch name
@@ -254,6 +257,16 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
         
         logging.info(f"[GIT] Merging PR #{pr_number} into {work_branch}...")
         run_git_cmd(["merge", "--no-edit", "FETCH_HEAD"])
+
+        # Delete the remote branch now that it's merged
+        if branch_name:
+            logging.info(f"[GIT] Deleting remote branch '{branch_name}'...")
+            try:
+                run_git_cmd(["push", "origin", "--delete", branch_name])
+            except subprocess.CalledProcessError as e:
+                # Often branches are auto-deleted by GitHub if configured, so we don't treat failure as fatal
+                logging.debug(f"Remote branch deletion failed (possibly already deleted): {e.stderr}")
+        
         return True
     except subprocess.CalledProcessError as e:
         logging.error(f"Git fetch/merge failed: {e.stderr}")
