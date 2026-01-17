@@ -24,7 +24,7 @@ from jules_agent_sdk.exceptions import JulesAPIError
 TIMEOUT_LIMIT_MIN = 24 * 60    # Maximum time for a single Jules task
 STALE_THRESHOLD_MIN = 20      # Minutes of inactivity before considering a session stalled
 MAX_RETRIES = 3                # Maximum number of times to retry a failed task
-DEFAULT_WORK_BRANCH = "ralph-wiggum" # Persistent git branch where changes are applied
+DEFAULT_WORK_BRANCH = "verne_durand" # Persistent git branch where changes are applied
 AUTOMATION_MODE = "AUTO_CREATE_PR"   # Jules behavior (AUTO_CREATE_PR results in a branch/PR)
 POLL_INTERVAL_SEC = 30         # Seconds between polling the Jules API for status updates
 RETRY_DELAY_SEC = 15           # Seconds to wait between retries of a failed task
@@ -296,7 +296,7 @@ def run_jules_task(
                 "githubRepoContext": {"startingBranch": work_branch}
             },
             "automationMode": AUTOMATION_MODE,
-            "title": f"Ralph Task: {task[:30]}...",
+            "title": f"Verne Task: {task[:30]}...",
             "requirePlanApproval": True
         }
         
@@ -340,7 +340,7 @@ def parse_plan(plan_path: str) -> Tuple[List[Tuple[int, str]], int]:
     return pending_tasks, all_task_count
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ralph Wiggum: Autonomous Jules SDK Harness")
+    parser = argparse.ArgumentParser(description="Verne Durand: Autonomous Jules SDK Harness")
     parser.add_argument("--plan", required=True, help="Path to markdown checklist file")
     parser.add_argument("--project", default=".", help="Root path of the project")
     parser.add_argument("--branch", default=DEFAULT_WORK_BRANCH, help="The persistent work branch")

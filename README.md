@@ -1,6 +1,6 @@
 
 
-## Ralph Wiggum: Autonomous Jules SDK Harness
+## Verne Durand: Autonomous Jules SDK Harness
 
 This script automates the execution of multiple tasks using the Jules AI agent. It parses a markdown checklist (e.g., `PLAN.md`) and executes unchecked tasks sequentially.
 
@@ -15,7 +15,7 @@ This script automates the execution of multiple tasks using the Jules AI agent. 
 Run the harness using `uv`:
 ```bash
 export JULES_API_KEY="your-api-key"
-uv run ralph-wiggum-jules.py --plan PLAN.md --project /path/to/project
+uv run verne_durand.py --plan PLAN.md --project /path/to/project
 ```
 
 ### Flow Architecture

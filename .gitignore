@@ -2,5 +2,5 @@
 .lsp
 .env
 inspect_sdk.py
-ralph_verify/
-ralph_test/
+verne_verify/
+verne_test/
