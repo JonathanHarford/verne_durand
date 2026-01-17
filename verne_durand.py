@@ -3,6 +3,7 @@
 # dependencies = [
 #   "jules-agent-sdk",
 #   "python-dotenv",
+#   "PyYAML",
 # ]
 # ///
 
@@ -13,6 +14,7 @@ import re
 import subprocess
 import sys
 import time
+import yaml
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict, Any
 from dotenv import load_dotenv
@@ -21,13 +23,13 @@ from jules_agent_sdk.models import Session
 from jules_agent_sdk.exceptions import JulesAPIError
 
 # CONFIGURATION
-TIMEOUT_LIMIT_MIN = 24 * 60    # Maximum time for a single Jules task
-STALE_THRESHOLD_MIN = 20      # Minutes of inactivity before considering a session stalled
-MAX_RETRIES = 3                # Maximum number of times to retry a failed task
-DEFAULT_WORK_BRANCH = "verne_durand" # Persistent git branch where changes are applied
-AUTOMATION_MODE = "AUTO_CREATE_PR"   # Jules behavior (AUTO_CREATE_PR results in a branch/PR)
-POLL_INTERVAL_SEC = 30         # Seconds between polling the Jules API for status updates
-RETRY_DELAY_SEC = 15           # Seconds to wait between retries of a failed task
+TIMEOUT_LIMIT_MIN = int(os.environ.get("VERNE_TIMEOUT_MIN", 24 * 60))
+STALE_THRESHOLD_MIN = int(os.environ.get("VERNE_STALE_THRESHOLD_MIN", 20))
+MAX_RETRIES = int(os.environ.get("VERNE_MAX_RETRIES", 3))
+DEFAULT_WORK_BRANCH = os.environ.get("VERNE_WORK_BRANCH", "verne_durand")
+AUTOMATION_MODE = os.environ.get("VERNE_AUTOMATION_MODE", "AUTO_CREATE_PR")
+POLL_INTERVAL_SEC = int(os.environ.get("VERNE_POLL_INTERVAL_SEC", 30))
+RETRY_DELAY_SEC = int(os.environ.get("VERNE_RETRY_DELAY_SEC", 15))
 
 def configure_logging(verbose: bool = False) -> None:
     """Configures the logging module."""
@@ -276,15 +278,17 @@ def run_jules_task(
     
     session_name = None
     if active_sessions:
-        session_name = active_sessions[0].name
-        logging.info(f"Resuming existing session: {session_name}")
+        session = active_sessions[0]
+        session_name = session.name
+        session_url = getattr(session, "url", "URL not available")
+        logging.info(f"Resuming existing session: {session_name} ({session_url})")
     else:
         # 2. Start Session
+        update_instr = get_plan_update_instruction(plan_path, task)
         full_prompt = (
             f"{task}\n\n"
             f"Use your best judgment, and ask absolutely no questions.\n\n"
-            f"As your final step, if the task is fully completed, update the '{plan_path}' file to mark this task as completed "
-            f"by changing '[ ] {task}' to '[x] {task}'. If you inadvertently completed any subsequent tasks, mark them off as well."
+            f"{update_instr}"
         )
         
         logging.info(f"Starting new Jules session for: '{task}'")
@@ -305,7 +309,8 @@ def run_jules_task(
         session = Session.from_dict(response)
         
         session_name = session.name
-        logging.info(f"Session started: {session_name}")
+        session_url = getattr(session, "url", "URL not available")
+        logging.info(f"Session started: {session_name} ({session_url})")
 
     # 3. Wait
     success, status, session_info = wait_for_session(client, session_name, timeout)
@@ -320,7 +325,7 @@ def run_jules_task(
 
 # --- CORE LOGIC ---
 
-def parse_plan(plan_path: str) -> Tuple[List[Tuple[int, str]], int]:
+def parse_markdown_plan(plan_path: str) -> Tuple[List[Tuple[int, str]], int]:
     if not os.path.exists(plan_path):
         logging.error(f"Plan file not found: {os.path.abspath(plan_path)}")
         sys.exit(1)
@@ -338,6 +343,59 @@ def parse_plan(plan_path: str) -> Tuple[List[Tuple[int, str]], int]:
                 pending_tasks.append((all_task_count, match.group(1).strip()))
 
     return pending_tasks, all_task_count
+
+def parse_yaml_plan(plan_path: str) -> Tuple[List[Tuple[int, str]], int]:
+    if not os.path.exists(plan_path):
+        logging.error(f"Plan file not found: {os.path.abspath(plan_path)}")
+        sys.exit(1)
+
+    with open(plan_path, "r") as f:
+        try:
+            data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            logging.error(f"Error parsing YAML plan: {e}")
+            sys.exit(1)
+
+    if not data or not isinstance(data, dict):
+        logging.error("YAML plan must be a dictionary (e.g. {tasks: [...]})")
+        sys.exit(1)
+
+    tasks_list = data.get("tasks", [])
+    if not tasks_list:
+        return [], 0
+
+    pending_tasks = []
+    total_count = len(tasks_list)
+
+    for i, item in enumerate(tasks_list):
+        if isinstance(item, str):
+            # Simple string list, assume all pending if present?
+            # Or better to require object for state tracking.
+            # We'll treat string as a pending task.
+            pending_tasks.append((i + 1, item))
+        elif isinstance(item, dict):
+            status = item.get("status", "pending")
+            task_desc = item.get("title") or item.get("task")
+            if not task_desc:
+                continue
+
+            if status.lower() not in ["completed", "done", "x"]:
+                pending_tasks.append((i + 1, task_desc))
+
+    return pending_tasks, total_count
+
+def get_plan_update_instruction(plan_path: str, task: str) -> str:
+    if plan_path.endswith(".yml") or plan_path.endswith(".yaml"):
+        return (
+            f"As your final step, if the task is fully completed, update the YAML file '{plan_path}' "
+            f"to mark this task as completed by setting its status to 'completed'. "
+            f"Ensure you preserve the YAML structure."
+        )
+    else:
+        return (
+            f"As your final step, if the task is fully completed, update the '{plan_path}' file to mark this task as completed "
+            f"by changing '[ ] {task}' to '[x] {task}'. If you inadvertently completed any subsequent tasks, mark them off as well."
+        )
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verne Durand: Autonomous Jules SDK Harness")
@@ -369,7 +427,11 @@ def main() -> None:
     ensure_work_branch(args.branch)
     push_changes(args.branch)
 
-    tasks, total_count = parse_plan(args.plan)
+    if args.plan.endswith(".yml") or args.plan.endswith(".yaml"):
+        tasks, total_count = parse_yaml_plan(args.plan)
+    else:
+        tasks, total_count = parse_markdown_plan(args.plan)
+
     if not tasks:
         logging.info("No tasks to perform.")
         sys.exit(0)
