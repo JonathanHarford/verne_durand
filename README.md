@@ -73,8 +73,12 @@ flowchart TD
     
     IncAttempts --> Execution(((2. Execute Task)))
     
-    Execution -->|SUCCESS| Push[Git Push Work Branch]
+    Execution -->|SUCCESS| Verify{Marked Complete?}
+    
+    Verify -- Yes --> Push[Git Push Work Branch]
     Push --> HasTasks
+    
+    Verify -- No --> Pause((Stop for Review))
     
     Execution -. FAIL/ERROR .-> CheckRetry{attempts < 3?}
 
@@ -116,15 +120,26 @@ flowchart TD
     Merge -.-> ReturnFail
 ```
 
-## Prompt
+## Prompt Template
+
+Jules is instructed to use a specific tool to mark tasks as completed. This ensures that the YAML file is updated reliably and that Jules makes an explicit "executive decision" on whether a task is truly finished.
 
 ```markdown
 {task}
 
 Use your best judgment, and ask absolutely no questions.
 
-As your final step, if the task is fully completed, update the '{plan_path}' file to mark this task as completed by moving '{task}' from the 'started' list to the 'completed' list. If you inadvertently completed any subsequent tasks, move them to 'completed' as well.
+As your final step, if and only if the task is fully completed, update the status by running:
+`uv run tools/mark_done.py --task "{task}" --plan "{plan_path}"`
+
+If you inadvertently completed any subsequent tasks, run the tool for those as well.
 ```
+
+## Tools
+
+*   **`tools/mark_done.py`**: A CLI tool used by Jules to move a task from `started` to `completed` in the plan YAML.
+*   **`tools/sync_prompt.py`**: A utility to keep the `README.md` and `prompt_template.txt` in sync.
+*   **`tools/session_info.py`**: Inspected detailed status of a Jules session.
 
 ## The Name
 

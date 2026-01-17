@@ -448,9 +448,17 @@ def main() -> None:
                 task_success, status = run_jules_task(client, task_name, ".", args.timeout, args.branch, args.plan)
                 
                 if task_success:
-                    push_changes(args.branch)
-                    success = True
-                    logging.info(f"Task completed.")
+                    # Verify if Jules actually marked it done via the tool
+                    updated_plan = manager.load()
+                    if task_name in updated_plan.get("completed", []):
+                        logging.info(f"Task '{task_name}' verified as COMPLETED.")
+                        push_changes(args.branch)
+                        success = True
+                    else:
+                        logging.warning(f"Jules submitted changes but did NOT mark '{task_name}' as completed.")
+                        logging.info("This likely means Jules considers the task partially finished. Stopping automation for review.")
+                        push_changes(args.branch)
+                        sys.exit(0)
                 else:
                     logging.warning(f"Task failed (Attempt {attempts}). Reason: {status}")
                     if attempts < MAX_RETRIES: 
