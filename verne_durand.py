@@ -306,7 +306,7 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
     match = re.search(r"/pull/(\d+)", pr_url)
     if not match:
         logging.error(f"Could not extract PR number from URL: {pr_url}")
-        return False
+        return False, False
     
     pr_number = match.group(1)
     
@@ -324,11 +324,15 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
                 run_git_cmd(["push", "origin", "--delete", branch_name])
             except:
                 pass
+
+        # Check for completion marker in PR description
+        pr_desc = safe_get_val(pr_data, ["description", "body"]) or ""
+        is_marked_done = "[DONE]" in pr_desc
         
-        return True
+        return True, is_marked_done
     except subprocess.CalledProcessError as e:
         logging.error(f"Git fetch/merge failed: {e.stderr}")
-        return False
+        return False, False
 
 def run_jules_task(
     client: JulesClient,
@@ -337,7 +341,7 @@ def run_jules_task(
     timeout: int,
     work_branch: str,
     plan_path: str
-) -> Tuple[bool, str]:
+) -> Tuple[bool, bool]:
     repo_slug = get_repo_slug()
     if not repo_slug:
         logging.error("Could not determine GitHub repo slug from 'origin' remote.")
@@ -395,13 +399,13 @@ def run_jules_task(
     # 3. Wait
     success, status, session_info = wait_for_session(client, session_name, timeout)
     if not success:
-        return False, status
+        return False, False
 
-    # 4. Apply changes
-    if session_info and apply_jules_changes(session_info, work_branch):
-        return True, "SUCCESS"
+    # 4. Apply changes (Returns: success, is_marked_done)
+    if session_info:
+        return apply_jules_changes(session_info, work_branch)
     else:
-        return False, "APPLY_FAILED"
+        return False, False
 
 # --- CORE LOGIC ---
 
@@ -459,6 +463,20 @@ class PlanManager:
             return False
         else:
             return False
+
+    def move_to_completed(self, task: str) -> bool:
+        data = self.load()
+        # Ensure structure
+        if "started" not in data: data["started"] = []
+        if "completed" not in data: data["completed"] = []
+
+        if task in data["started"]:
+            data["started"].remove(task)
+            if task not in data["completed"]:
+                data["completed"].append(task)
+            self.save(data)
+            return True
+        return False
 
 def parse_plan(plan_path: str) -> Tuple[List[Dict[str, str]], int, int]:
     manager = PlanManager(plan_path)
@@ -533,14 +551,13 @@ def main() -> None:
             success = False
             while attempts < MAX_RETRIES and not success:
                 attempts += 1
-                task_success, status = run_jules_task(client, task_name, ".", args.timeout, args.branch, args.plan)
+                task_success, is_marked_done = run_jules_task(client, task_name, ".", args.timeout, args.branch, args.plan)
                 
                 if task_success:
-                    # Verify if Jules actually marked it done via the tool
-                    updated_plan = manager.load()
-                    if task_name in updated_plan.get("completed", []):
-                        logging.info(f"Task '{task_name}' verified as COMPLETED.")
-                        push_changes(args.branch, message=f"verne: complete task '{task_name[:30]}'")
+                    if is_marked_done:
+                        if manager.move_to_completed(task_name):
+                            logging.info(f"Task '{task_name}' verified as COMPLETED.")
+                            push_changes(args.branch, message=f"verne: complete task '{task_name[:30]}'")
                         success = True
                     else:
                         logging.warning(f"Jules submitted changes but did NOT mark '{task_name}' as completed (Partial work).")

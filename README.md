@@ -133,10 +133,9 @@ Jules is instructed to use a specific tool to mark tasks as completed. This ensu
 
 Use your best judgment, and ask absolutely no questions.
 
-As your final step, if and only if the task is fully completed, update the status by running:
-`uv run --with PyYAML -c "import yaml; p='{plan_path}'; t='{task}'; d=yaml.safe_load(open(p)) or {{}}; [d[k].remove(t) for k in ['todo','started'] if d.get(k) and t in d[k]]; d.setdefault('completed',[]).append(t); yaml.dump(d, open(p,'w'), default_flow_style=False)"`
+As your final step, if and only if the task is fully completed, include the exact string '[DONE]' in your Pull Request description (or final comment). 
 
-If you inadvertently completed any subsequent tasks, run the tool for those as well.
+If you inadvertently completed any subsequent tasks, mention them and the [DONE] marker as well.
 ```
 
 ## Tools
