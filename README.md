@@ -33,7 +33,8 @@ config:
 ---
 flowchart TD
     Start((Start)) --> Init[Initialize: Check JULES_API_KEY, Chdir]
-    Init --> ParsePlan[Parse PLAN.md for Unchecked Tasks]
+    Init --> Ensure[Ensure Work Branch & Initial Push]
+    Ensure --> ParsePlan[Parse PLAN.md for Unchecked Tasks]
     ParsePlan --> HasTasks{Tasks left?}
     
     HasTasks -- No --> Done((Done))
@@ -46,13 +47,17 @@ flowchart TD
     
     RetryLoop -- Yes --> IncAttempts[attempts++]
     
-    IncAttempts --> Execution[[Execute Task (See Diagram 2)]]
+    IncAttempts --> Execution((("Execute Task<br>(See Diagram 2)")))
     
     Execution -- SUCCESS --> Push[Git Push Work Branch]
     Push --> HasTasks
     
-    Execution -- FAIL/ERROR --> RetryWait[Wait 10s]
+    Execution -- FAIL/ERROR --> CheckRetry{attempts < 3?}
+
+    CheckRetry -- Yes --> RetryWait[Wait 15s]
     RetryWait --> RetryLoop
+
+    CheckRetry -- No --> RetryLoop
 ```
 
 ### 2. Task Execution Detail (run_jules_task)
@@ -83,16 +88,29 @@ flowchart TD
     Status -- RUNNING --> WaitWait
 
     Status -- FAILED/ERROR --> ReturnFail((Return FAILURE))
-    Status -- COMPLETED --> ApplyChanges[Apply Changes]
+    Status -- COMPLETED --> ApplyChanges((Apply Changes))
 
-    subgraph MergeWorkflow [Apply Changes Flow]
-        direction TB
+    ApplyChanges --> MergeWorkflow(((Merge Workflow)))
+```
+
+### 3. Merge Workflow
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart TD
+
+
         CheckOutputs[Check Session Outputs for Pull Request] --> Fetch[Git Fetch Origin]
         Fetch --> FindBranch[Find Jules Remote Branch]
         FindBranch --> Merge[Git Merge Remote Branch]
         Merge --> MergeSuccess{Merge OK?}
         MergeSuccess -- Yes --> ReturnSuccess((Return SUCCESS))
         MergeSuccess -- No --> ReturnApplyFail((Return APPLY_FAILED))
-    end
-    ApplyChanges --> MergeWorkflow
+
 ```
+
+## The Name
+
+If one person checks out _Anathem_ thanks to this stupid name, it'll've been worth it.
