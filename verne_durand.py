@@ -543,10 +543,10 @@ def main() -> None:
                         push_changes(args.branch, message=f"verne: complete task '{task_name[:30]}'")
                         success = True
                     else:
-                        logging.warning(f"Jules submitted changes but did NOT mark '{task_name}' as completed.")
-                        logging.info("This likely means Jules considers the task partially finished. Stopping automation for review.")
+                        logging.warning(f"Jules submitted changes but did NOT mark '{task_name}' as completed (Partial work).")
+                        logging.info("Pushing partial work and continuing to the next task.")
                         push_changes(args.branch, message=f"verne: partial work for '{task_name[:30]}'")
-                        sys.exit(0)
+                        success = True # Move to next task
                 else:
                     logging.warning(f"Task failed (Attempt {attempts}). Reason: {status}")
                     if attempts < MAX_RETRIES: 
