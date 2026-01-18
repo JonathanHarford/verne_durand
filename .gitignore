@@ -4,3 +4,5 @@
 inspect_sdk.py
 verne_verify/
 verne_test/
+__pycache__/
+*.pyc
