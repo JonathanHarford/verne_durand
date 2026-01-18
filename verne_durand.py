@@ -277,7 +277,7 @@ def safe_get_val(obj: Any, keys: List[str], default: Any = None) -> Any:
                 return val
     return default
 
-def apply_jules_changes(session: Any, work_branch: str) -> bool:
+def apply_jules_changes(session: Any, work_branch: str) -> Tuple[bool, Dict[str, Any]]:
     """
     Applies the changes from Jules by fetching the PR directly using git.
     Uses GitHub's PR ref (refs/pull/NUMBER/head) which doesn't require knowing the branch name.
@@ -300,13 +300,13 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
     
     if not pr_data:
         logging.error("No Pull Request output found in session. Cannot apply changes automatically yet.")
-        return False
+        return False, {}
 
     # Get PR URL safely
     pr_url = safe_get_val(pr_data, ["url", "pull_request_url"])
     if not pr_url:
         logging.error("No PR URL found in pull request output")
-        return False
+        return False, {}
     
     # Get Branch name safely (for deletion later)
     # Jules SDK might use 'branch', 'branch_name', or 'head_branch'
@@ -316,7 +316,7 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
     match = re.search(r"/pull/(\d+)", pr_url)
     if not match:
         logging.error(f"Could not extract PR number from URL: {pr_url}")
-        return False, False
+        return False, {}
     
     pr_number = match.group(1)
     
@@ -335,16 +335,17 @@ def apply_jules_changes(session: Any, work_branch: str) -> bool:
             except:
                 pass
 
-        # Check for completion marker in PR title or description (case-insensitive)
+        # Parse completion status from PR title/description
         pr_title = safe_get_val(pr_data, ["title", "subject"]) or ""
         pr_desc = safe_get_val(pr_data, ["description", "body"]) or ""
-        full_text = f"{pr_title}\n{pr_desc}".upper()
-        is_marked_done = "[DONE]" in full_text
+        full_text = f"{pr_title}\n{pr_desc}"
+
+        parsed_response = parse_jules_response(full_text)
         
-        return True, is_marked_done
+        return True, parsed_response
     except subprocess.CalledProcessError as e:
         logging.error(f"Git fetch/merge failed: {e.stderr}")
-        return False, False
+        return False, {}
 
 def run_jules_task(
     client: JulesClient,
@@ -353,11 +354,11 @@ def run_jules_task(
     timeout: int,
     work_branch: str,
     plan_path: str
-) -> Tuple[bool, bool]:
+) -> Tuple[bool, Dict[str, Any], str, str]:
     repo_slug = get_repo_slug()
     if not repo_slug:
         logging.error("Could not determine GitHub repo slug from 'origin' remote.")
-        return False, "NO_REPO_SLUG"
+        return False, {}, "", "NO_REPO_SLUG"
 
     # 1. Check for existing active sessions (Resume logic)
     session_list_resp = client.sessions.list(page_size=100)
@@ -385,7 +386,7 @@ def run_jules_task(
             full_prompt = template.format(task=task, plan_path=plan_path)
         except Exception as e:
             logging.error(f"Failed to load prompt template: {e}")
-            return False, "PROMPT_LOAD_FAILED"
+            return False, {}, "", "PROMPT_LOAD_FAILED"
         
         # 2. Start Session (Load prompt from template)
         # Use raw POST to support automationMode which is missing in high-level SDK
@@ -411,13 +412,20 @@ def run_jules_task(
     # 3. Wait
     success, status, session_info = wait_for_session(client, session_name, timeout)
     if not success:
-        return False, False
+        return False, {}, "", ""
 
-    # 4. Apply changes (Returns: success, is_marked_done)
+    # 4. Apply changes (Returns: success, parsed_resp)
     if session_info:
-        return apply_jules_changes(session_info, work_branch)
+        success, parsed_resp = apply_jules_changes(session_info, work_branch)
+        if success:
+             # Get commit hash
+             commit_hash_proc = run_git_cmd(["rev-parse", "HEAD"])
+             commit_hash = commit_hash_proc.stdout.strip()
+             return True, parsed_resp, short_id(session_name), commit_hash
+        else:
+             return False, {}, "", ""
     else:
-        return False, False
+        return False, {}, "", ""
 
 # --- CORE LOGIC ---
 
@@ -490,6 +498,101 @@ class PlanManager:
             return True
         return False
 
+    def record_completion(self, task: str, session_id: str, commit_hash: str) -> None:
+        """Moves a task from started to completed, adding metadata."""
+        data = self.load()
+        if "started" not in data: data["started"] = []
+        if "completed" not in data: data["completed"] = []
+
+        if task in data["started"]:
+            data["started"].remove(task)
+
+        # Add to completed as object
+        entry = {
+            "task": task,
+            "session_id": session_id,
+            "commit_hash": commit_hash
+        }
+        data["completed"].append(entry)
+        self.save(data)
+
+    def expand_task(self, original_task: str, completed_items: List[str], next_task: str, todo_items: List[str], session_id: str, commit_hash: str) -> None:
+        """Splits a task into completed parts, next task, and future todos."""
+        data = self.load()
+        if "started" not in data: data["started"] = []
+        if "completed" not in data: data["completed"] = []
+        if "todo" not in data: data["todo"] = []
+
+        # Remove original
+        if original_task in data["started"]:
+            data["started"].remove(original_task)
+
+        # Add completed items
+        for item in completed_items:
+            entry = {
+                "task": item,
+                "session_id": session_id,
+                "commit_hash": commit_hash
+            }
+            data["completed"].append(entry)
+
+        # Add next task
+        if next_task:
+            # We want to ensure next_task is the one being worked on, so strictly it should be in started.
+            # If there are other started tasks (parallel), this might simply append.
+            # But the orchestration usually picks the first.
+            data["started"].insert(0, next_task)
+
+        # Add todo items (prepend to todo to keep them next in line after 'next_task' finishes)
+        if todo_items:
+             data["todo"] = todo_items + data["todo"]
+
+        self.save(data)
+
+def parse_jules_response(text: str) -> Dict[str, Any]:
+    """
+    Parses the commit message/PR description from Jules.
+    Returns a dict with keys: is_done, completed (list), next (str), todo (list).
+    """
+    result = {
+        "is_done": False,
+        "completed": [],
+        "next": None,
+        "todo": []
+    }
+
+    if not text:
+        return result
+
+    # Check for legacy [DONE] marker anywhere in text
+    if "[DONE]" in text.upper():
+        result["is_done"] = True
+
+    # Check for [STATUS] block
+    lines = text.splitlines()
+    in_status_block = False
+
+    for line in lines:
+        line = line.strip()
+        if line.upper() == "[STATUS]":
+            in_status_block = True
+            continue
+
+        if in_status_block:
+            upper_line = line.upper()
+            if upper_line.startswith("COMPLETED:"):
+                val = line[len("COMPLETED:"):].strip()
+                if val: result["completed"].append(val)
+            elif upper_line.startswith("NEXT:"):
+                val = line[len("NEXT:"):].strip()
+                if val and not result["next"]:
+                    result["next"] = val
+            elif upper_line.startswith("TODO:"):
+                val = line[len("TODO:"):].strip()
+                if val: result["todo"].append(val)
+
+    return result
+
 def parse_plan(plan_path: str) -> Tuple[List[Dict[str, str]], int, int]:
     manager = PlanManager(plan_path)
     if not os.path.exists(plan_path):
@@ -561,13 +664,26 @@ def main() -> None:
             success = False
             while attempts < MAX_RETRIES and not success:
                 attempts += 1
-                task_success, is_marked_done = run_jules_task(client, task_name, ".", args.timeout, args.branch, args.plan)
+                task_success, parsed_resp, session_id, commit_hash = run_jules_task(client, task_name, ".", args.timeout, args.branch, args.plan)
                 
                 if task_success:
-                    if is_marked_done:
-                        if manager.move_to_completed(task_name):
-                            logging.info(f"Task verified as COMPLETED.")
-                            push_changes(args.branch, plan_path=args.plan, message=f"verne: complete task '{task_name[:30]}'")
+                    if parsed_resp.get("completed"):
+                        logging.info("Applying structured status update...")
+                        manager.expand_task(
+                            original_task=task_name,
+                            completed_items=parsed_resp["completed"],
+                            next_task=parsed_resp["next"],
+                            todo_items=parsed_resp["todo"],
+                            session_id=session_id,
+                            commit_hash=commit_hash
+                        )
+                        push_changes(args.branch, plan_path=args.plan, message=f"verne: update tasks from '{task_name[:30]}'")
+                        success = True
+                    elif parsed_resp.get("is_done"):
+                        # Legacy DONE or simple completion
+                        manager.record_completion(task_name, session_id, commit_hash)
+                        logging.info(f"Task verified as COMPLETED.")
+                        push_changes(args.branch, plan_path=args.plan, message=f"verne: complete task '{task_name[:30]}'")
                         success = True
                     else:
                         logging.warning(f"Jules submitted changes but did NOT mark task as completed (Partial work).")

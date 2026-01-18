@@ -2,6 +2,28 @@
 
 Use your best judgment, and ask absolutely no questions.
 
-As your final step, if and only if the task is fully completed, include the exact string '[DONE]' in your Pull Request description (or final comment). 
+REPORTING YOUR STATUS:
+As your final step, you MUST include a status block in your Pull Request description to update the plan.
 
-If you inadvertently completed any subsequent tasks, mention them and the [DONE] marker as well.
+If you fully completed the assigned task, use:
+[STATUS]
+COMPLETED: {task}
+
+If you only completed PART of the task, you must break it down:
+[STATUS]
+COMPLETED: <Description of the subtask you finished>
+NEXT: <Description of the next immediate subtask to do>
+TODO: <Description of remaining subtasks>
+
+Example of partial work:
+[STATUS]
+COMPLETED: Implement Login UI
+NEXT: Implement Login Authentication Logic
+TODO: Write Login Tests
+
+If you finished the assigned task AND extra tasks:
+[STATUS]
+COMPLETED: {task}
+COMPLETED: <Extra Task Name>
+
+Use this exact format.
