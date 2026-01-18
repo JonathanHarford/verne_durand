@@ -1,0 +1,28 @@
+# Task
+{task}
+
+# Context
+Refer to '{plan_path}' for project status. You are not allowed to modify this file.
+
+# Instructions
+1. Act autonomously. Use your best judgment.
+2. DO NOT ask questions.
+3. Every PR description MUST end with a status block for the orchestrator:
+
+If you fully finished the task:
+```
+[STATUS]
+COMPLETED
+```
+
+If you could not finish the entire task or found new work...
+```
+[STATUS]
+COMPLETED: <What was actually finished>
+TODO: <What was left to do. There can be multiple TODOs.>
+```
+
+CRITICAL:
+- If the task is fully done, strictly use the "COMPLETED" (single line) format.
+- The `TODO` list should ONLY contain remaining parts of the *current* task or *newly discovered* dependencies. 
+- DO NOT list tasks that are already in the original plan.

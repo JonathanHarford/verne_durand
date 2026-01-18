@@ -1,0 +1,42 @@
+todo:
+- Import the **Three.js core** and **OrbitControls** via an ES module map in `index.html`.
+- Initialize the `THREE.Scene` object.
+- Configure a `PerspectiveCamera` with a 75-degree field of view and position it at
+  .
+- Set up the `WebGLRenderer`, enable shadow maps, and append the DOM element to the
+  body.
+- Add an `AmbientLight` for base visibility.
+- Add a `DirectionalLight` with `castShadow = true` to simulate sunlight.
+- Create a plane mesh (floor), rotate it  on the X-axis, and set `receiveShadow =
+  true`.
+- Implement a window resize event listener to update the camera aspect ratio and renderer
+  size.
+- Create a main `THREE.Group` named `juggler` to hold the character.
+- Add a static cylinder or box mesh to the group for the **Torso**.
+- Create a `rightShoulder` Group and position it at the top-right of the torso.
+- Add a `rightUpperArm` mesh inside the `rightShoulder` group, offset so it pivots
+  at the shoulder.
+- Create a `rightElbow` Group and add it as a child of the `rightUpperArm`.
+- Add a `rightLowerArm` mesh inside the `rightElbow` group, offset so it pivots at
+  the elbow.
+- Repeat the Shoulder/Elbow/Arm steps for the left side.
+- Apply `MeshStandardMaterial` to all body parts for light reactivity.
+- Create a reuseable `SphereGeometry` for the juggling balls.
+- Create an array named `balls` to store the mesh objects.
+- Instantiate 3 ball meshes and add them to the scene (not the juggler group, so they
+  move independently).
+- Set the initial position of the balls to rest near the hand coordinates.
+- 'Define physics constants: gravity  and an initial vertical velocity .'
+- 'Define timing variables: `timeScale` and `phaseOffset` (to ensure balls are thrown
+  in sequence, not all at once).'
+- 'Create a helper function to calculate parabolic position based on time : .'
+- Create a helper function to oscillate the arm angles using `Math.sin(time)` to mimic
+  throwing motions.
+- Create the `animate()` function calling `requestAnimationFrame(animate)`.
+- Calculate `elapsedTime` using a `THREE.Clock`.
+- Update the position of Ball 1 based on the trajectory formula.
+- Update the rotation of the `Shoulder` and `Elbow` groups to match the rhythm of
+  the balls.
+- Call `renderer.render(scene, camera)`.
+- Update the position of Ball 2 with a time offset of  of the cycle.
+- Update the position of Ball 3 with a time offset of  of the cycle.
