@@ -8,5 +8,4 @@ dependencies = [
     "httpx>=0.28.1",
     "python-dotenv",
     "jules-agent-sdk",
-    "PyYAML",
 ]
