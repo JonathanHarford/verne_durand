@@ -139,8 +139,6 @@ def ensure_work_branch(target_branch: str) -> None:
 def push_changes(branch: str, plan_path: Optional[str] = None, message: str = "Verne Durand: Automated update") -> None:
     """
     Stages all changes, commits them, and pushes to origin.
-    If only the plan file is modified and the previous commit was also an automated update,
-    it will --amend the commit to reduce history noise.
     """
     try:
         # Check if there are any changes to commit
@@ -153,34 +151,14 @@ def push_changes(branch: str, plan_path: Optional[str] = None, message: str = "V
                 run_git_cmd(["push", "-u", "origin", branch], check=False)
             return
 
-        # Determine if we should amend
-        should_amend = False
-        if plan_path:
-            abs_plan = os.path.basename(os.path.abspath(plan_path))
-            changed_files = [line[3:].strip() for line in status_out.split("\n")]
-            # If ONLY the plan file is changed
-            if len(changed_files) == 1 and abs_plan in changed_files[0]:
-                # Check if previous commit was also a verne update
-                last_msg_proc = run_git_cmd(["log", "-1", "--pretty=%s"], check=False)
-                last_msg = last_msg_proc.stdout.strip()
-                if last_msg.startswith("verne:") or last_msg.startswith("Verne Durand:"):
-                    should_amend = True
-
         run_git_cmd(["add", "."])
-        if should_amend:
-            logging.info("git commit --amend (checklist update)")
-            run_git_cmd(["commit", "--amend", "--no-edit"])
-        else:
-            logging.info(f"git commit -m '{message}'")
-            run_git_cmd(["commit", "-m", message])
+        logging.info(f"git commit -m '{message}'")
+        run_git_cmd(["commit", "-m", message])
         
         ret = run_git_cmd(["remote"], check=False)
         if "origin" in ret.stdout:
-            logging.info(f"git push '{branch}' origin (force={should_amend})")
-            if should_amend:
-                run_git_cmd(["push", "--force-with-lease", "origin", branch])
-            else:
-                run_git_cmd(["push", "-u", "origin", branch])
+            logging.info(f"git push '{branch}' origin")
+            run_git_cmd(["push", "-u", "origin", branch])
     except subprocess.CalledProcessError as e:
         logging.error(f"Git operation failed: {e.stderr}")
 
