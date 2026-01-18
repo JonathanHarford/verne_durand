@@ -1,73 +1,53 @@
+completed: []
+started:
+- '**Detail**: Create `lib/plan.py`. Implement `PlanManager` class. Logic: Initialize
+  with filepath, `load()`, `save()`, methods for `get_next_task()`, `mark_complete()`,
+  `mark_started()`. Refinement: Store loaded data in memory and only `save()` when
+  modified. Add a `reload()` method to refresh from disk explicitly. File: `lib/plan.py`
+  (New). **Definition of Done**: Unit tests in `tests/test_plan.py` verify loading,
+  saving, and state transitions work correctly. **Verify**: Ensure all tests pass.'
 todo:
-  -  "**Detail**: Create `lib/plan.py`.
-    Implement `PlanManager` class.
-    Logic: Initialize with filepath, `load()`, `save()`, methods for `get_next_task()`, `mark_complete()`, `mark_started()`.
-    Refinement: Store loaded data in memory and only `save()` when modified. Add a `reload()` method to refresh from disk explicitly.
-    File: `lib/plan.py` (New).
-    **Definition of Done**: Unit tests in `tests/test_plan.py` verify loading, saving, and state transitions work correctly.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Create `lib/git.py`.
-    Implement `GitClient` class or helper functions.
-    Logic: Move `run_git_cmd`, `ensure_repo_initialized`, `ensure_work_branch`, `push_changes`, `get_repo_slug` from `verne_durand.py`.
-    File: `lib/git.py` (New).
-    **Definition of Done**: Unit tests in `tests/test_git.py` (mocking subprocess) verify git commands are constructed correctly.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Create `lib/ui.py`.
-    Logic: Move `ColorFormatter` class and `configure_logging` function from `verne_durand.py`.
-    File: `lib/ui.py` (New).
-    **Definition of Done**: A simple test script imports `configure_logging` and writes to stdout without error.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Create `lib/jules.py`.
-    Implement `JulesHelper` class or functions.
-    Logic: Move `wait_for_session`, `apply_jules_changes`, `run_jules_task` (the API parts) from `verne_durand.py`.
-    Refactor `wait_for_session` to accept a callback or return richer status objects.
-    File: `lib/jules.py` (New).
-    **Definition of Done**: Unit tests in `tests/test_jules.py` (mocking `JulesClient`) verify session polling logic and PR extraction.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Refactor `verne_durand.py`.
-    Import `lib.plan`, `lib.git`, `lib.ui`, `lib.jules`.
-    Remove all inline class definitions and helper functions moved to `lib/`.
-    Update `main()` to instantiate `PlanManager` once (outside the loop) and use `GitClient`.
-    Update the loop to call `plan_manager.reload()` at the start of each iteration (to catch external changes).
-    File: `verne_durand.py` (Modify).
-    **Definition of Done**: The script runs successfully with a dummy `PLAN.yaml` and mocks/dry-run enabled, performing the same orchestration flow.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Refactor `tools/mark_done.py`.
-    Import `lib.plan.PlanManager`.
-    Replace inline YAML parsing logic with `PlanManager` methods.
-    File: `tools/mark_done.py` (Modify).
-    **Definition of Done**: Running `tools/mark_done.py --task \"Test Task\"` correctly updates `PLAN.yaml`.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Refactor `tools/session_info.py`.
-    Import `lib.ui` for consistent logging/formatting if applicable.
-    (Optional) Use `lib.jules` if shared logic for fetching session details exists.
-    File: `tools/session_info.py` (Modify).
-    **Definition of Done**: `tools/session_info.py <session_id>` produces the expected output.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Optimize `lib/plan.py`.
-    Modify `reload()` to check `os.path.getmtime(filepath)`.
-    Only re-parse YAML if the file timestamp has changed since last load.
-    File: `lib/plan.py` (Modify).
-    **Definition of Done**: Unit tests verify that `load()` does not read file if mtime is unchanged.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Enhance `lib/git.py` and `lib/jules.py`.
-    `lib/git.py`: Add validation for branch names (allow only alphanumeric + dashes/underscores).
-    `lib/jules.py`: Improve `wait_for_session` error handling to log specific API errors instead of generic `?`.
-    Files: `lib/git.py`, `lib/jules.py` (Modify).
-    **Definition of Done**: Tests verify that invalid branch names raise `ValueError`.
-    **Verify**: Ensure all tests pass."
-
-  -  "**Detail**: Update `README.md`.
-    Describe the new `lib/` directory structure.
-    Update \"Development\" section to mention running tests.
-    File: `README.md` (Modify).
-    **Definition of Done**: README accurately describes the refactored project structure.
-    **Verify**: Ensure all tests pass."
+- '**Detail**: Create `lib/git.py`. Implement `GitClient` class or helper functions.
+  Logic: Move `run_git_cmd`, `ensure_repo_initialized`, `ensure_work_branch`, `push_changes`,
+  `get_repo_slug` from `verne_durand.py`. File: `lib/git.py` (New). **Definition of
+  Done**: Unit tests in `tests/test_git.py` (mocking subprocess) verify git commands
+  are constructed correctly. **Verify**: Ensure all tests pass.'
+- '**Detail**: Create `lib/ui.py`. Logic: Move `ColorFormatter` class and `configure_logging`
+  function from `verne_durand.py`. File: `lib/ui.py` (New). **Definition of Done**:
+  A simple test script imports `configure_logging` and writes to stdout without error.
+  **Verify**: Ensure all tests pass.'
+- '**Detail**: Create `lib/jules.py`. Implement `JulesHelper` class or functions.
+  Logic: Move `wait_for_session`, `apply_jules_changes`, `run_jules_task` (the API
+  parts) from `verne_durand.py`. Refactor `wait_for_session` to accept a callback
+  or return richer status objects. File: `lib/jules.py` (New). **Definition of Done**:
+  Unit tests in `tests/test_jules.py` (mocking `JulesClient`) verify session polling
+  logic and PR extraction. **Verify**: Ensure all tests pass.'
+- '**Detail**: Refactor `verne_durand.py`. Import `lib.plan`, `lib.git`, `lib.ui`,
+  `lib.jules`. Remove all inline class definitions and helper functions moved to `lib/`.
+  Update `main()` to instantiate `PlanManager` once (outside the loop) and use `GitClient`.
+  Update the loop to call `plan_manager.reload()` at the start of each iteration (to
+  catch external changes). File: `verne_durand.py` (Modify). **Definition of Done**:
+  The script runs successfully with a dummy `PLAN.yaml` and mocks/dry-run enabled,
+  performing the same orchestration flow. **Verify**: Ensure all tests pass.'
+- '**Detail**: Refactor `tools/mark_done.py`. Import `lib.plan.PlanManager`. Replace
+  inline YAML parsing logic with `PlanManager` methods. File: `tools/mark_done.py`
+  (Modify). **Definition of Done**: Running `tools/mark_done.py --task "Test Task"`
+  correctly updates `PLAN.yaml`. **Verify**: Ensure all tests pass.'
+- '**Detail**: Refactor `tools/session_info.py`. Import `lib.ui` for consistent logging/formatting
+  if applicable. (Optional) Use `lib.jules` if shared logic for fetching session details
+  exists. File: `tools/session_info.py` (Modify). **Definition of Done**: `tools/session_info.py
+  <session_id>` produces the expected output. **Verify**: Ensure all tests pass.'
+- '**Detail**: Optimize `lib/plan.py`. Modify `reload()` to check `os.path.getmtime(filepath)`.
+  Only re-parse YAML if the file timestamp has changed since last load. File: `lib/plan.py`
+  (Modify). **Definition of Done**: Unit tests verify that `load()` does not read
+  file if mtime is unchanged. **Verify**: Ensure all tests pass.'
+- '**Detail**: Enhance `lib/git.py` and `lib/jules.py`. `lib/git.py`: Add validation
+  for branch names (allow only alphanumeric + dashes/underscores). `lib/jules.py`:
+  Improve `wait_for_session` error handling to log specific API errors instead of
+  generic `?`. Files: `lib/git.py`, `lib/jules.py` (Modify). **Definition of Done**:
+  Tests verify that invalid branch names raise `ValueError`. **Verify**: Ensure all
+  tests pass.'
+- '**Detail**: Update `README.md`. Describe the new `lib/` directory structure. Update
+  "Development" section to mention running tests. File: `README.md` (Modify). **Definition
+  of Done**: README accurately describes the refactored project structure. **Verify**:
+  Ensure all tests pass.'
