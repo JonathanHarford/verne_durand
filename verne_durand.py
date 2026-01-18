@@ -26,7 +26,6 @@ from jules_agent_sdk.exceptions import JulesAPIError
 TIMEOUT_LIMIT_MIN = 24 * 60    # Maximum time for a single Jules task
 STALE_THRESHOLD_MIN = 20      # Minutes of inactivity before considering a session stalled
 MAX_RETRIES = 3                # Maximum number of times to retry a failed task
-DEFAULT_WORK_BRANCH = "verne_durand" # Persistent git branch where changes are applied
 AUTOMATION_MODE = "AUTO_CREATE_PR"   # Jules behavior (AUTO_CREATE_PR results in a branch/PR)
 POLL_INTERVAL_SEC = 30         # Seconds between polling the Jules API for status updates
 RETRY_DELAY_SEC = 15           # Seconds to wait between retries of a failed task
@@ -109,6 +108,13 @@ def ensure_git_repo() -> None:
         logging.error("Current directory is not a git repository.")
         sys.exit(1)
 
+def is_git_dirty() -> bool:
+    """Checks if there are uncommitted changes (staged or unstaged)."""
+    ret = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    if ret.returncode != 0:
+        return True # Assume dirty/error if we can't check
+    return bool(ret.stdout.strip())
+
 def ensure_repo_initialized() -> None:
     """Ensures the repo has at least one commit."""
     ensure_git_repo()
@@ -136,9 +142,10 @@ def ensure_work_branch(target_branch: str) -> None:
     else:
         subprocess.run(["git", "checkout", target_branch], check=True, capture_output=True)
 
-def push_changes(branch: str, plan_path: Optional[str] = None, message: str = "Verne Durand: Automated update") -> None:
+def push_changes(branch: str, plan_path: Optional[str] = None, message: str = "Verne Durand: Automated update") -> bool:
     """
     Stages all changes, commits them, and pushes to origin.
+    Returns True on success, False on failure.
     """
     try:
         # Check if there are any changes to commit
@@ -148,8 +155,12 @@ def push_changes(branch: str, plan_path: Optional[str] = None, message: str = "V
             # Check if we need to push anyway (e.g. initial setup)
             remote_proc = run_git_cmd(["remote"], check=False)
             if "origin" in remote_proc.stdout:
-                run_git_cmd(["push", "-u", "origin", branch], check=False)
-            return
+                # We want to propagate failure here if push fails (e.g. protected branch)
+                push_res = run_git_cmd(["push", "-u", "origin", branch], check=False)
+                if push_res.returncode != 0:
+                    logging.error(f"Git push failed: {push_res.stderr}")
+                    return False
+            return True
 
         run_git_cmd(["add", "."])
         logging.info(f"git commit -m '{message}'")
@@ -158,9 +169,14 @@ def push_changes(branch: str, plan_path: Optional[str] = None, message: str = "V
         ret = run_git_cmd(["remote"], check=False)
         if "origin" in ret.stdout:
             logging.info(f"git push '{branch}' origin")
-            run_git_cmd(["push", "-u", "origin", branch])
+            push_res = run_git_cmd(["push", "-u", "origin", branch], check=False)
+            if push_res.returncode != 0:
+                 logging.error(f"Git push failed: {push_res.stderr}")
+                 return False
+        return True
     except subprocess.CalledProcessError as e:
         logging.error(f"Git operation failed: {e.stderr}")
+        return False
 
 def get_repo_slug() -> Optional[str]:
     """Extracts 'owner/repo' from the git remote."""
@@ -505,7 +521,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Verne Durand: Autonomous Jules SDK Harness")
     parser.add_argument("--plan", required=True, help="Path to markdown checklist file")
     parser.add_argument("--project", default=".", help="Root path of the project")
-    parser.add_argument("--branch", default=DEFAULT_WORK_BRANCH, help="The persistent work branch")
+    # Changed default to None so we can detect if user provided it
+    parser.add_argument("--branch", default=None, help="The work branch (defaults to current branch)")
     parser.add_argument("--timeout", type=int, default=TIMEOUT_LIMIT_MIN * 60, help="Task timeout in seconds")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
 
@@ -524,12 +541,34 @@ def main() -> None:
         sys.exit(1)
     os.chdir(abs_project_path)
 
+    # Ensure we are in a git repo before checking status
+    ensure_git_repo()
+
+    # 1. FAIL IF DIRTY
+    if is_git_dirty():
+        logging.error("Working directory has uncommitted changes. Please commit or stash them before running.")
+        sys.exit(1)
+
+    # 2. DETERMINE BRANCH
+    if args.branch:
+        target_branch = args.branch
+        ensure_work_branch(target_branch)
+    else:
+        target_branch = get_current_branch()
+        if not target_branch or target_branch == "HEAD":
+            logging.error("Could not determine current branch (or in detached HEAD state).")
+            sys.exit(1)
+        logging.info(f"Running on current branch: {target_branch}")
+        # Ensure work branch calls ensure_repo_initialized, which is safe
+        ensure_work_branch(target_branch)
+
     # Initialize SDK Client
     client = JulesClient(api_key=api_key)
 
-    # Initialize Git
-    ensure_work_branch(args.branch)
-    push_changes(args.branch, plan_path=args.plan)
+    # Initialize Git - Check for Protected Branch via Push
+    if not push_changes(target_branch, plan_path=args.plan):
+        logging.error("Initial push failed. Branch might be protected or network is down. Exiting.")
+        sys.exit(1)
 
     # Initialize manager
     manager = PlanManager(args.plan)
@@ -555,24 +594,25 @@ def main() -> None:
 
             if task_status == "todo":
                 if manager.move_to_started(task_name):
-                    push_changes(args.branch, plan_path=args.plan, message=f"verne: start task '{task_name[:30]}'")
+                    push_changes(target_branch, plan_path=args.plan, message=f"verne: start task '{task_name[:30]}'")
             
             attempts = 0
             success = False
             while attempts < MAX_RETRIES and not success:
                 attempts += 1
-                task_success, is_marked_done = run_jules_task(client, task_name, ".", args.timeout, args.branch, args.plan)
+                # Use target_branch (which is resolved correctly)
+                task_success, is_marked_done = run_jules_task(client, task_name, ".", args.timeout, target_branch, args.plan)
                 
                 if task_success:
                     if is_marked_done:
                         if manager.move_to_completed(task_name):
                             logging.info(f"Task verified as COMPLETED.")
-                            push_changes(args.branch, plan_path=args.plan, message=f"verne: complete task '{task_name[:30]}'")
+                            push_changes(target_branch, plan_path=args.plan, message=f"verne: complete task '{task_name[:30]}'")
                         success = True
                     else:
                         logging.warning(f"Jules submitted changes but did NOT mark task as completed (Partial work).")
                         logging.info("Pushing partial work and continuing.")
-                        push_changes(args.branch, plan_path=args.plan, message=f"verne: partial work for '{task_name[:30]}'")
+                        push_changes(target_branch, plan_path=args.plan, message=f"verne: partial work for '{task_name[:30]}'")
                         success = True # Move to next task cycle
                 else:
                     logging.warning(f"Task failed (Attempt {attempts}).")
