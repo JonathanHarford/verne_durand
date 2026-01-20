@@ -69,6 +69,15 @@ def test_plan_manager():
     assert "Task B" in todos
     assert "Task C" in todos
     
+    print("\nTesting reject_session...")
+    manager.reject_session(session_id="sess_stale_123", task="Task A", reason="stale")
+    data_with_rejected = manager.load()
+    assert "rejected" in data_with_rejected
+    assert len(data_with_rejected["rejected"]) == 1
+    assert data_with_rejected["rejected"][0]["session_id"] == "sess_stale_123"
+    assert data_with_rejected["rejected"][0]["reason"] == "stale"
+    print("reject_session verified.")
+
     print("\nTest passed! Logic verified.")
     
     os.remove(test_file)

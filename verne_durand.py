@@ -212,8 +212,8 @@ def short_id(name: str) -> str:
     """Returns the short ID from a session name (e.g. 'sessions/123' -> '123')."""
     return name.split("/")[-1] if "/" in name else name
 
-def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tuple[bool, str, Optional[Any]]:
-    """Polls session status until completion or timeout."""
+def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tuple[bool, str, Optional[Any], str]:
+    """Polls session status until completion or timeout. Returns (success, status, session_info, session_name)"""
     
     try:
         start_time = time.time()
@@ -245,10 +245,10 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                 
                 if state == "COMPLETED":
                     print()
-                    return True, "COMPLETED", session
+                    return True, "COMPLETED", session, session_name
                 if state == "FAILED":
                     print()
-                    return False, "FAILED", session
+                    return False, "FAILED", session, session_name
                 
                 if state == "AWAITING_PLAN_APPROVAL":
                     client.sessions.approve_plan(session_name)
@@ -265,7 +265,7 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                 if (time.time() - last_act_time) > (STALE_THRESHOLD_MIN * 60):
                     logging.warning(f"Session {short_id(session_name)} stale. Giving up.")
                     print()
-                    return False, "STALE", None
+                    return False, "STALE", None, session_name
 
                 time.sleep(POLL_INTERVAL_SEC)
             except (JulesAPIError, Exception):
@@ -273,10 +273,10 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                 print("?", end="", flush=True)
                 time.sleep(POLL_INTERVAL_SEC)
     except Exception:
-        return False, "TIMEOUT", None
+        return False, "TIMEOUT", None, session_name
 
     print()
-    return False, "TIMEOUT", None
+    return False, "TIMEOUT", None, session_name
 
 def safe_get_val(obj: Any, keys: List[str], default: Any = None) -> Any:
     """Safely gets a value from a dict or object using a list of possible keys/attributes."""
@@ -369,8 +369,9 @@ def run_jules_task(
     project_path: str,
     timeout: int,
     work_branch: str,
-    plan_path: str
-) -> Tuple[bool, Dict[str, Any], str, str]:
+    plan_path: str,
+    rejected_session_ids: List[str] = None
+) -> Tuple[bool, Dict[str, Any], str, str, str]:
     repo_slug = get_repo_slug()
     if not repo_slug:
         logging.error("Could not determine GitHub repo slug from 'origin' remote.")
@@ -379,6 +380,7 @@ def run_jules_task(
     # 1. Check for existing active sessions (Resume logic)
     session_list_resp = client.sessions.list(page_size=100)
     sessions = session_list_resp.get("sessions", [])
+    rejected_ids = set(rejected_session_ids or [])
     
     # Filter by repo AND recency to avoid re-joining stalled sessions
     repo_sessions = [s for s in sessions if s.source_context and repo_slug in s.source_context.source]
@@ -386,6 +388,7 @@ def run_jules_task(
         s for s in repo_sessions 
         if s.state not in ["COMPLETED", "FAILED"] 
         and is_recent(s.update_time, STALE_THRESHOLD_MIN * 60)
+        and short_id(s.name) not in rejected_ids
     ]
     
     session_name = None
@@ -426,9 +429,9 @@ def run_jules_task(
         logging.info(f"Jules session started: {web_url}")
 
     # 3. Wait
-    success, status, session_info = wait_for_session(client, session_name, timeout)
+    success, status, session_info, active_session_name = wait_for_session(client, session_name, timeout)
     if not success:
-        return False, {}, "", ""
+        return False, {}, "", status, active_session_name
 
     # 4. Apply changes (Returns: success, parsed_resp)
     if session_info:
@@ -437,11 +440,11 @@ def run_jules_task(
              # Get commit hash
              commit_hash_proc = run_git_cmd(["rev-parse", "HEAD"])
              commit_hash = commit_hash_proc.stdout.strip()
-             return True, parsed_resp, short_id(session_name), commit_hash
+             return True, parsed_resp, short_id(active_session_name), "COMPLETED", commit_hash
         else:
-             return False, {}, "", ""
+             return False, {}, "", "APPLY_FAILED", active_session_name
     else:
-        return False, {}, "", ""
+        return False, {}, "", "NO_SESSION_INFO", active_session_name
 
 # --- CORE LOGIC ---
 
@@ -451,13 +454,14 @@ class PlanManager:
 
     def load(self) -> Dict[str, List[str]]:
         if not os.path.exists(self.filepath):
-             return {"todo": [], "started": [], "completed": []}
+             return {"todo": [], "started": [], "completed": [], "rejected": []}
         with open(self.filepath, 'r') as f:
             data = yaml.safe_load(f) or {}
         return {
             "todo": data.get("todo") or [],
             "started": data.get("started") or [],
-            "completed": data.get("completed") or []
+            "completed": data.get("completed") or [],
+            "rejected": data.get("rejected") or []
         }
 
     def save(self, data: Dict[str, List[str]]) -> None:
@@ -574,6 +578,22 @@ class PlanManager:
              data["todo"] = new_todos + data["todo"]
 
         self.save(data)
+
+    def reject_session(self, session_id: str, task: str, reason: str = "stale") -> None:
+        """Adds a session to the rejected list to prevent re-joining."""
+        data = self.load()
+        if "rejected" not in data:
+            data["rejected"] = []
+        
+        # Avoid duplicate rejections
+        if not any(r.get("session_id") == session_id for r in data["rejected"] if isinstance(r, dict)):
+            data["rejected"].append({
+                "session_id": session_id,
+                "task": task,
+                "reason": reason,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            self.save(data)
 
 def parse_jules_response(text: str) -> Dict[str, Any]:
     """
@@ -719,8 +739,21 @@ def main() -> None:
             success = False
             while attempts < MAX_RETRIES and not success:
                 attempts += 1
-                task_success, parsed_resp, session_id, commit_hash = run_jules_task(client, task_name, ".", args.timeout, target_branch, args.plan)
+                plan_data = manager.load()
+                rejected_ids = [r.get("session_id") for r in plan_data.get("rejected", []) if isinstance(r, dict)]
                 
+                task_success, parsed_resp, session_id, status, commit_hash = run_jules_task(
+                    client, task_name, ".", args.timeout, target_branch, args.plan, rejected_ids
+                )
+                
+                if not task_success and status == "STALE":
+                    logging.warning(f"Task '{task_name}' stale. Recording rejected session {session_id}.")
+                    manager.reject_session(session_id, task_name, reason="stale")
+                    push_changes(target_branch, message=f"verne: reject stale session {session_id}")
+                    # We continue the retry loop, but next time run_jules_task will skip this session
+                    time.sleep(RETRY_DELAY_SEC)
+                    continue
+
                 if task_success:
                     # NEW LOGIC: check for is_done (simple status) or completed items (split status)
                     if parsed_resp.get("is_done") and not parsed_resp.get("completed"):
