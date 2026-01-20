@@ -240,8 +240,25 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                 session = client.sessions.get(session_name)
                 state = getattr(session, "state", "STATE_UNSPECIFIED")
                 
+                # Activity check for stale detection AND progress visualization
+                has_changed = False
+                try:
+                    activities = client.activities.list_all(session_name)
+                    curr_count = len(activities)
+                    if curr_count > last_act_count:
+                        last_act_count = curr_count
+                        last_act_time = time.time()
+                        has_changed = True
+                except:
+                    pass
+
+                # Determine status character
+                char = status_map.get(state, "?")
+                if state == "IN_PROGRESS" and has_changed:
+                    char = ","
+                
                 # Print character for status
-                print(status_map.get(state, "?"), end="", flush=True)
+                print(char, end="", flush=True)
                 
                 if state == "COMPLETED":
                     print()
@@ -252,15 +269,6 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                 
                 if state == "AWAITING_PLAN_APPROVAL":
                     client.sessions.approve_plan(session_name)
-                
-                # Stale check via activity count
-                try:
-                    activities = client.activities.list_all(session_name)
-                    if len(activities) > last_act_count:
-                        last_act_count = len(activities)
-                        last_act_time = time.time()
-                except:
-                    pass
                 
                 if (time.time() - last_act_time) > (STALE_THRESHOLD_MIN * 60):
                     logging.warning(f"Session {short_id(session_name)} stale. Giving up.")
@@ -375,7 +383,7 @@ def run_jules_task(
     repo_slug = get_repo_slug()
     if not repo_slug:
         logging.error("Could not determine GitHub repo slug from 'origin' remote.")
-        return False, {}, "", "NO_REPO_SLUG"
+        return False, {}, "", "NO_REPO_SLUG", ""
 
     # 1. Check for existing active sessions (Resume logic)
     session_list_resp = client.sessions.list(page_size=100)
@@ -405,7 +413,7 @@ def run_jules_task(
             full_prompt = template.format(task=task, plan_path=plan_path)
         except Exception as e:
             logging.error(f"Failed to load prompt template: {e}")
-            return False, {}, "", "PROMPT_LOAD_FAILED"
+            return False, {}, "", "PROMPT_LOAD_FAILED", ""
         
         # 2. Start Session (Load prompt from template)
         # Use raw POST to support automationMode which is missing in high-level SDK
@@ -430,8 +438,10 @@ def run_jules_task(
 
     # 3. Wait
     success, status, session_info, active_session_name = wait_for_session(client, session_name, timeout)
+    curr_session_id = short_id(active_session_name)
+
     if not success:
-        return False, {}, "", status, active_session_name
+        return False, {}, curr_session_id, status, ""
 
     # 4. Apply changes (Returns: success, parsed_resp)
     if session_info:
@@ -440,11 +450,11 @@ def run_jules_task(
              # Get commit hash
              commit_hash_proc = run_git_cmd(["rev-parse", "HEAD"])
              commit_hash = commit_hash_proc.stdout.strip()
-             return True, parsed_resp, short_id(active_session_name), "COMPLETED", commit_hash
+             return True, parsed_resp, curr_session_id, "COMPLETED", commit_hash
         else:
-             return False, {}, "", "APPLY_FAILED", active_session_name
+             return False, {}, curr_session_id, "APPLY_FAILED", ""
     else:
-        return False, {}, "", "NO_SESSION_INFO", active_session_name
+        return False, {}, curr_session_id, "NO_SESSION_INFO", ""
 
 # --- CORE LOGIC ---
 

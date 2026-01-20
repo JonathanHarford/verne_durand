@@ -1,0 +1,271 @@
+completed:
+  - commit_hash: 30b168c11819dd9e3c517240eec7476c013ccab5
+    session_id: "5086920214762132523"
+    task: Create new project directory gravity_wars, run npm init -y to create package.json
+rejected:
+  - reason: stale
+    session_id: "58055067951523186"
+    task:
+      Install dependencies with npm install --save babylonjs @babylonjs/core @babylonjs/loaders
+      vite typescript @types/node
+    timestamp: "2026-01-20T03:12:38.740597+00:00"
+started:
+  - Install dependencies with npm install --save babylonjs @babylonjs/core @babylonjs/loaders
+    vite typescript @types/node
+todo:
+  - Install dev dependencies with npm install --save-dev vitest @vitest/ui @types/babylonjs
+  - Create tsconfig.json with target ES2020, module ESNext, strict true, moduleResolution
+    bundler
+  - Create vite.config.ts with basic config and vitest test configuration
+  - Create index.html with canvas element id="renderCanvas" and script src="/src/main.ts"
+    type="module"
+  - Create src/main.ts that imports Engine, Scene, creates engine and scene, verify
+    blank page loads in browser
+  - "Add Camera to scene: ArcRotateCamera at position (0, 30, 80) looking at (0, 0,
+    0), attach controls to canvas, test camera rotates with mouse"
+  - Add HemisphericLight to scene at (0, 50, 0) with intensity 0.7, test scene is lit
+  - "Add ground plane: MeshBuilder.CreateGround with size 500, StandardMaterial gray
+    color at y=-10, test ground visible"
+  - Create basic render loop with engine.runRenderLoop calling scene.render, test smooth
+    60fps rendering
+  - Create src/entities/ship.ts with Ship class containing playerId, health (100), position
+    (Vector3), velocity (Vector3.Zero()), test Ship constructor initializes correctly
+  - "Add mesh property to Ship: CreateCapsule with height 3 radius 1.5 in constructor,
+    test ship.mesh exists"
+  - Add color parameter to Ship constructor, set mesh.material to new StandardMaterial
+    with diffuseColor, test ship appears with color
+  - Add update method to Ship that adds velocity * deltaTime to mesh.position, test
+    ship moves when velocity set
+  - Add rotation property (number) to Ship, add getForwardVector method that returns
+    Vector3 based on rotation, test forward vector points correctly at rotation 0, PI/2,
+    PI
+  - Create src/game.ts with Game class containing scene, ships array, test Game initializes
+    with empty ships array
+  - Add spawnShip method to Game that creates Ship at position with color, adds to ships
+    array, test ship added to array and visible in scene
+  - Spawn player 1 ship (red, Color3.Red) at position (-30, 0, 0), spawn player 2 ship
+    (blue, Color3.Blue) at position (30, 0, 0), test both ships visible
+  - "Rotate ships to face each other: player 1 rotation PI/2, player 2 rotation -PI/2,
+    test ships face inward"
+  - Create src/systems/physics.ts with PhysicsSystem class, add update(deltaTime) method,
+    test PhysicsSystem can be instantiated
+  - Add applyVelocity method to PhysicsSystem that updates all ship positions based
+    on velocity, test ships move correctly
+  - "Add velocity damping: multiply ship velocity by 0.98 each frame, test ships slow
+    to stop without input"
+  - Add max velocity clamping at 50 units/sec, test ships cannot exceed speed limit
+  - Add arena bounds wrapping at x=-150 to 150, z=-150 to 150, test ship at x=151 wraps
+    to x=-149
+  - Create src/systems/input.ts with InputSystem class, store key states in Map<string,
+    boolean>, listen to keydown/keyup events, test key states update correctly
+  - "Add player 1 controls: W key sets thrustP1 flag, A/D keys set rotateLeftP1/rotateRightP1
+    flags, test flags set on key press"
+  - "Add player 2 controls: ArrowUp sets thrustP2, ArrowLeft/ArrowRight set rotate flags,
+    test P2 controls independent from P1"
+  - "Add applyThrust method to Ship: if thrusting, add getForwardVector() * 50 * deltaTime
+    to velocity, test ship accelerates forward"
+  - "Add applyRotation method to Ship: if rotating, change rotation by \xB13 * deltaTime,\
+    \ test ship rotates left/right"
+  - Connect InputSystem to Ships in Game update loop, test WASD controls player 1 ship,
+    arrows control player 2 ship
+  - Create src/systems/camera.ts with CameraSystem class taking camera and ships array,
+    test CameraSystem initializes
+  - "Add updateCamera method: calculate midpoint of all alive ships, move camera target
+    to midpoint, test camera centers between ships"
+  - Calculate max distance between any two ships, set camera radius to distance * 1.5
+    + 50, test camera zooms out when ships separate
+  - "Add smooth camera movement: lerp camera target and radius with factor 0.1, test
+    camera movement is smooth not jumpy"
+  - Clamp camera radius between 40 and 200, test camera respects min/max zoom
+  - "Create src/entities/missile.ts with Missile class: ownerId, position, velocity,
+    lifetime (3.0 sec), test Missile initializes"
+  - "Add mesh to Missile: CreateSphere radius 0.5, material color based on owner ship
+    color but darker, test missile visible"
+  - "Add update method to Missile: update position by velocity * deltaTime, decrease
+    lifetime, return true if expired, test missiles move and expire"
+  - Create src/systems/combat.ts with CombatSystem class, add fireMissile method taking
+    ship, spawns Missile at ship position + forward * 4, velocity = ship velocity +
+    forward * 60, test missile spawns correctly
+  - Add ammo property to Ship (default 8), add canFire method returning ammo > 0, test
+    ammo checks work
+  - Modify fireMissile to check ship.canFire(), decrement ship.ammo on fire, test ammo
+    decreases and blocks firing at 0
+  - "Add ammo regeneration: ship gains 1 ammo every 1.5 seconds up to max 8, track regenTimer
+    in Ship, test ammo regenerates over time"
+  - Add Space key for player 1 fire, RShift for player 2 fire in InputSystem, test fire
+    keys spawn missiles
+  - "Add checkMissileCollision method to CombatSystem: loop missiles and ships, if distance
+    < 3.0 and missile.ownerId != ship.playerId, return {missile, ship}, test collision
+    detection works"
+  - Add takeDamage(amount) method to Ship, reduces health by amount, test health decreases
+    correctly
+  - "In CombatSystem update: check collisions, call ship.takeDamage(25), remove missile,
+    test missiles damage enemy ships"
+  - Add isAlive property to Ship (health > 0), test ship death detection works
+  - "Add checkWinCondition method to Game: count alive ships, if count == 1 return winner
+    playerId, test win detection"
+  - "Add gameState property to Game: 'playing' | 'gameOver', add winnerId property,
+    test state tracking works"
+  - "In Game update: if gameState == 'playing', check win condition, if winner found
+    set gameState = 'gameOver', test game stops on win"
+  - Add simple DOM overlay div#gameOver (hidden by default), show when gameState = 'gameOver'
+    with text "Player X Wins!", test overlay appears
+  - "Add reset method to Game: dispose all meshes, clear arrays, reset gameState to
+    'playing', respawn both ships, test reset clears everything"
+  - Listen for R key press, call game.reset(), test game restarts correctly
+  - Hide gameOver overlay on reset, test UI state resets
+  - Create src/ui/hud.ts with HUD class, create DOM elements for health/ammo bars positioned
+    absolutely, test HUD elements appear
+  - Add updateHealthBar method taking playerId and health percent, update width of health
+    bar div, test bars update correctly
+  - "Add health bars: player 1 top-left (red), player 2 top-right (blue), 200px wide,
+    test both bars visible"
+  - Add updateAmmoDisplay method taking playerId and ammo count, update text content,
+    test ammo text updates
+  - 'Add ammo counters below health bars showing "Ammo: X", test ammo displays correctly'
+  - Connect HUD to Game update loop, update all UI elements each frame, test UI stays
+    in sync with game state
+  - Create src/ui/menu.ts with Menu class, add showMenu and hideMenu methods controlling
+    DOM visibility, test menu show/hide works
+  - 'Create menu DOM structure in index.html: title "GRAVITY WARS", subtitle "Press
+    SPACE to Start", style centered, test menu appears on load'
+  - Add gameState 'menu' to Game, start in menu state, don't spawn ships or run game
+    loop until state changes, test game starts in menu
+  - Listen for Space key in menu state, transition to 'playing' state, hide menu, start
+    game, test game starts from menu
+  - 'Add game over screen: after 3 seconds in gameOver state, show menu again with "Player
+    X Wins!" message, test full loop works'
+  - Add gameState 'paused' to Game, add pause/unpause methods that toggle between playing
+    and paused, test pause state changes
+  - Listen for P key during 'playing' state to pause, P key during 'paused' to unpause,
+    test pause toggling works
+  - 'Add paused overlay: semi-transparent dark background with "PAUSED - Press P to
+    Resume" text, test pause UI appears'
+  - When paused, skip game logic update but still render scene, test game freezes but
+    rendering continues
+  - "Create src/vfx/trail.ts with TrailParticle class: position, velocity (Vector3.Zero),
+    lifetime (1.0 sec), alpha (1.0), mesh (small sphere radius 0.3), test TrailParticle
+    creates"
+  - Add TrailSystem class with particles array, add spawnParticle(position, color) method,
+    test particles spawn at position
+  - "In TrailSystem update: decrease particle lifetime and alpha, remove when lifetime
+    <= 0, test particles fade and despawn"
+  - "In Ship update: if velocity length > 5, spawn trail particle every 0.1 seconds
+    (track timer), use ship color, test trails appear behind moving ships"
+  - "Add missile trails: missiles spawn white particles every 0.05 seconds radius 0.2,
+    test missile trails visible"
+  - "Create src/vfx/explosion.ts with Explosion class: spawns 30 particles with random
+    outward velocity (10-30 range), orange/red colors, lifetime 0.8 sec, test explosion
+    creates particles"
+  - Add ExplosionSystem class managing active explosions, update method ticks particles,
+    test explosions animate correctly
+  - "In Ship takeDamage: when health <= 0, spawn explosion at ship position, test explosion
+    appears on death"
+  - "Add screen shake: create ScreenShake class, apply random offset to camera position
+    for 0.4 sec then lerp back, test shake on ship death"
+  - "Add thruster particles: when ship thrusting, spawn small orange particles (radius
+    0.3) behind ship every 0.05 sec, test thrust particles appear"
+  - "Add thruster glow: when ship thrusting, add PointLight as child of ship mesh at
+    rear position, orange color intensity 20, remove when not thrusting, test glow appears"
+  - "Add hit flash: when ship takes damage, increase emissiveColor of material to white
+    for 0.1 sec then fade back, test flash visible on hit"
+  - "Add muzzle flash: when missile fires, spawn bright white particle at spawn point
+    that fades over 0.1 sec, test flash visible"
+  - "Install howler.js for audio: npm install howler @types/howler, test import works"
+  - Create src/audio/sounds.ts with SoundManager class, load placeholder sounds or generate
+    simple beeps using Web Audio API, test sounds load
+  - Add playSound method taking sound name, test sounds play
+  - Play "shoot" sound on missile fire, test audio feedback on fire
+  - Play "explosion" sound on ship death, test death sound plays
+  - Play "hit" sound when missile hits ship, test hit feedback works
+  - Add background music loop (simple ambient track), play during gameplay, test music
+    loops
+  - "Create src/entities/gravityWell.ts with GravityWell class: position, mass (1000),
+    mesh (sphere radius 8, yellow emissive material), test well creates"
+  - "Add calculateGravityForce function: takes shipPos, wellPos, mass, returns force
+    Vector3 using inverse square law, test force direction toward well"
+  - Add GravitySystem class with wells array, update method applies forces to all ships
+    from all wells, test ships attracted to wells
+  - Spawn central star at (0, 0, 0) with mass 1000, test ships orbit around center
+  - Tune GRAVITY_CONSTANT value (try 500) so orbits feel natural, test stable orbit
+    at radius 50
+  - "Create src/entities/powerup.ts with PowerUp class: position, type ('shield'|'boost'|'gravitybomb'),
+    mesh (sphere radius 2), test powerup creates"
+  - "Add PowerUpSystem class with powerups array, add spawnPowerUp method at random\
+    \ position within \xB1100 on X/Z, test powerups spawn"
+  - "Add checkPickup method: if ship within 4.0 units of powerup, return {ship, powerup},
+    test pickup detection works"
+  - Add activePowerup property to Ship (null | {type, duration}), add activatePowerup
+    method, test ship stores active powerup
+  - "On pickup: call ship.activatePowerup with powerup type and duration, remove powerup
+    from scene, test pickup applies effect"
+  - "Add powerup respawn: 15 seconds after pickup, spawn new random powerup at random
+    position, test respawn system works"
+  - "Add Shield effect: when ship has activePowerup type 'shield', ignore damage in
+    takeDamage method, test shield blocks damage"
+  - "Add shield visual: spawn translucent cyan sphere (radius 3.5) as child of ship
+    mesh, rotate slowly, test shield bubble visible"
+  - Shield duration 5 seconds OR until hit once (whichever first), then remove, test
+    shield expiration
+  - Spawn 3 random powerups at game start, test multiple powerups appear
+  - "Add Boost effect: on pickup, multiply ship velocity by 2.0, set duration 2 seconds,
+    test speed increase"
+  - "In Ship update: if boost active, render brighter trail particles and increase trail
+    spawn rate, test boost visual"
+  - After 2 seconds, remove boost effect, test boost expires
+  - "Add GravityBomb effect: on pickup, spawn temporary GravityWell at ship position
+    with mass 2000, duration 3 seconds, test well attracts ships"
+  - Add pulsing purple PointLight to bomb well, test visual distinction from stars
+  - After 3 seconds despawn temporary well, test cleanup works
+  - "Add player 3 support: green ship, IJKL keys (I=thrust, J/L=rotate, K=fire), spawn
+    at (0, 0, 40), test 3-player works"
+  - "Add player 4 support: yellow ship, numpad 8456 controls (8=thrust, 4/6=rotate,
+    5=fire), spawn at (0, 0, -40), test 4-player works"
+  - Update CameraSystem to calculate bounding box of all ships, adjust camera to fit
+    all, test camera includes all players
+  - "Change win condition: last ship standing wins (works for 2-4 players), test multiplayer
+    victory"
+  - "Add LockOn powerup: next 3 missiles have 'homing' flag, missiles with homing
+    steer toward nearest enemy each frame, test homing missiles"
+  - "Add ChainLightning powerup: fires 5 missiles in spread pattern (\xB130 degree cone),\
+    \ test spread fire"
+  - "Add TimeSlow powerup: reduce game speed to 0.5 for 3 seconds (scale deltaTime),
+    test slow motion effect"
+  - "Playtest and tune: ship health (100), missile damage (25), ammo max (8), regen
+    rates for good 2-3 min matches, test match pacing feels good"
+  - "Add best-of-3 rounds system: track round wins per player, reset ships after each
+    round, first to 2 rounds wins match, test round system"
+  - Add round transition overlay "Round X" for 2 seconds between rounds, test transitions
+    smooth
+  - "Add match timer: 3 minute countdown displayed at top center, player with most health
+    wins at timeout, test timer and timeout victory"
+  - "Create src/entities/asteroid.ts with Asteroid class: position, mesh (sphere radius
+    4, gray rocky material), test asteroids spawn"
+  - Spawn 5 asteroids at random positions at game start, test asteroids visible
+  - "Add asteroid collision: if ship within 5.0 units of asteroid, ship takes 15 damage
+    and bounces back (reverse velocity), test collision damage"
+  - "Add asteroid destruction: on collision, respawn asteroid at new random position
+    after 20 seconds, test respawn works"
+  - "Improve ship mesh: replace capsule with low-poly pyramid (CreateCylinder with tessellation
+    3), test pyramids look better"
+  - "Improve star visuals: add slowly rotating child mesh with glow, increase emissive
+    intensity, test stars more interesting"
+  - "Add starfield background: create sphere (radius 1000) with inverted normals, texture
+    with white points, test space backdrop"
+  - "Add particle quality setting: low/medium/high affects particle count, test performance
+    impact"
+  - "Add options menu: volume sliders for music/SFX, particle quality dropdown, test
+    settings work"
+  - Add match duration option (1/3/5 minutes), test timer adjusts
+  - "Add gamepad support using Gamepad API: left stick rotation, right trigger thrust,
+    A button fire, test controller works"
+  - "Add tutorial overlay: first play shows control diagram for each player, press T
+    to dismiss, test tutorial helpful"
+  - "Add ship customization: choose triangle/circle/diamond mesh shape in menu, test
+    ship shapes load"
+  - "Optimize performance: use object pooling for particles/missiles, profile with Chrome
+    DevTools, ensure 60 FPS with 4 players, test performance"
+  - Add proper game icon and page title, test branding appears
+  - "Build production bundle: npm run build, test dist folder contains optimized files"
+  - "Test full gameplay loop 10 times: menu \u2192 4 player match \u2192 game over \u2192\
+    \ rematch, ensure no crashes"
