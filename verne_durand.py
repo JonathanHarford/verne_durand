@@ -424,7 +424,7 @@ def run_jules_task(
                 "githubRepoContext": {"startingBranch": work_branch}
             },
             "automationMode": AUTOMATION_MODE,
-            "title": f"Verne Task: {task[:30]}...",
+            "title": f"Verne Task: {task[:100]}{'...' if len(task) > 100 else ''}",
             "requirePlanApproval": True
         }
         
@@ -743,7 +743,7 @@ def main() -> None:
 
             if task_status == "todo":
                 if manager.move_to_started(task_name):
-                    push_changes(target_branch, message=f"verne: start task '{task_name[:30]}'")
+                    push_changes(target_branch, message=f"verne: start task '{task_name[:100]}{'...' if len(task_name) > 100 else ''}'")
             
             attempts = 0
             success = False
@@ -770,7 +770,7 @@ def main() -> None:
                         # Simple completion
                         manager.record_completion(task_name, session_id, commit_hash)
                         logging.info(f"Task verified as COMPLETED.")
-                        push_changes(target_branch, message=f"verne: complete task '{task_name[:30]}'")
+                        push_changes(target_branch, message=f"verne: complete task '{task_name[:100]}{'...' if len(task_name) > 100 else ''}'")
                         success = True
                     elif parsed_resp.get("completed"):
                         # Split / Partial completion
@@ -782,18 +782,18 @@ def main() -> None:
                             session_id=session_id,
                             commit_hash=commit_hash
                         )
-                        push_changes(target_branch, message=f"verne: update tasks from '{task_name[:30]}'")
+                        push_changes(target_branch, message=f"verne: update tasks from '{task_name[:100]}{'...' if len(task_name) > 100 else ''}'")
                         success = True
                     elif parsed_resp.get("is_done"): 
                         # Fallback if both present? 
                         manager.record_completion(task_name, session_id, commit_hash)
                         logging.info(f"Task verified as COMPLETED.")
-                        push_changes(target_branch, message=f"verne: complete task '{task_name[:30]}'")
+                        push_changes(target_branch, message=f"verne: complete task '{task_name[:100]}{'...' if len(task_name) > 100 else ''}'")
                         success = True
                     else:
                         logging.warning(f"Jules submitted changes but did NOT mark task as completed (Partial work).")
                         logging.info("Pushing partial work and continuing.")
-                        push_changes(target_branch, message=f"verne: partial work for '{task_name[:30]}'")
+                        push_changes(target_branch, message=f"verne: partial work for '{task_name[:100]}{'...' if len(task_name) > 100 else ''}'")
                         success = True # Move to next task cycle
                 else:
                     logging.warning(f"Task failed (Attempt {attempts}).")
