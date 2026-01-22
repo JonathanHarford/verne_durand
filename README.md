@@ -17,6 +17,7 @@ Jules is a bit flaky. Sessions hang. Sometimes Jules stops to ask if it's doing 
 - **Resilient**: Automatically resumes active sessions or retries failed tasks (but don't worry, not indefinitely).
 - **Auto-Approval**: Detects when a plan requires approval and automatically approves it to maintain autonomy.
 - **Git Integration**: Automatically manages branch creation, remote pushing, merging Jules' changes, and **cleaning up transient branches** after work is applied.
+- **Manual Control**: Halt the entire execution loop by simply pausing the session in the Jules Web UI.
 
 ## Usage
 
@@ -166,7 +167,7 @@ While Jules is working, Verne Durand displays a character every 30 seconds to in
 - `U`: **User Feedback** - Jules is waiting for manual input from the user (via the Web UI).
 - `.`: **In Progress** - Jules is in the `IN_PROGRESS` state, but hasn't created a new activity since the last poll.
 - `,`: **Active Progress** - Jules is `IN_PROGRESS` and has created new activities (e.g., running commands, editing files) since the last poll.
-- `Z`: **Paused** - The session has been manually or automatically paused.
+- `Z`: **Paused** - The session has been manually or automatically paused. Verne Durand will halt execution if this state is detected.
 - `F`: **Failed** - Jules encountered an error and couldn't continue.
 - `C`: **Completed** - Jules has finished the task and created a Pull Request.
 - `?`: **Unknown** - Transient API error or unknown state.

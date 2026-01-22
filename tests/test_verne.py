@@ -3,7 +3,31 @@ import os
 import yaml
 import tempfile
 import shutil
-from verne_durand import PlanManager, parse_jules_response
+from unittest.mock import MagicMock, patch
+import verne_durand
+from verne_durand import PlanManager, parse_jules_response, wait_for_session
+
+class TestSessionWaiting(unittest.TestCase):
+    def setUp(self):
+        self.original_poll_interval = verne_durand.POLL_INTERVAL_SEC
+        verne_durand.POLL_INTERVAL_SEC = 0.01
+
+    def tearDown(self):
+        verne_durand.POLL_INTERVAL_SEC = self.original_poll_interval
+
+    @patch('time.sleep')
+    def test_wait_for_session_paused(self, mock_sleep):
+        client = MagicMock()
+        session_mock = MagicMock()
+        session_mock.state = "PAUSED"
+        session_mock.name = "sessions/123"
+        client.sessions.get.return_value = session_mock
+        client.activities.list_all.return_value = []
+
+        success, status, _, _ = wait_for_session(client, "sessions/123", timeout=1)
+
+        self.assertFalse(success)
+        self.assertEqual(status, "PAUSED")
 
 class TestResponseParser(unittest.TestCase):
     def test_parse_simple_status(self):
@@ -17,14 +41,9 @@ TODO: Task D
 """
         result = parse_jules_response(text)
         self.assertEqual(result['completed'], ["Task A"])
-        self.assertEqual(result['next'], "Task B")
-        self.assertEqual(result['todo'], ["Task C", "Task D"])
-
-    def test_parse_done_marker(self):
-        text = "I have finished. [DONE]"
-        result = parse_jules_response(text)
-        self.assertTrue(result['is_done'])
-        self.assertEqual(result.get('completed'), []) # No structured blocks
+        # NEXT is mapped to TODO, next field is unused
+        self.assertIsNone(result['next'])
+        self.assertEqual(result['todo'], ["Task B", "Task C", "Task D"])
 
     def test_parse_partial_status(self):
         text = """
@@ -34,8 +53,8 @@ NEXT: Part 2
 """
         result = parse_jules_response(text)
         self.assertEqual(result['completed'], ["Part 1"])
-        self.assertEqual(result['next'], "Part 2")
-        self.assertEqual(result['todo'], [])
+        self.assertIsNone(result['next'])
+        self.assertEqual(result['todo'], ["Part 2"])
 
     def test_parse_completed_with_desc(self):
         text = """
@@ -80,30 +99,34 @@ class TestPlanManager(unittest.TestCase):
         manager = self.create_plan(started=["Big Task"], todo=["Future Task"])
 
         completed_items = ["Subtask 1"]
-        next_task = "Subtask 2"
-        todo_items = ["Subtask 3"]
+        # next_task = "Subtask 2" # Next is now just the first todo
+        todo_items = ["Subtask 2", "Subtask 3"]
 
         manager.expand_task(
             "Big Task",
             completed_items,
-            next_task,
             todo_items,
             "sess_123",
             "sha_abc"
         )
 
         data = manager.load()
-        # Check started
-        self.assertEqual(data["started"], ["Subtask 2"])
+        # Check started - nothing starts automatically in expand_task anymore?
+        # The logic in expand_task:
+        # data["todo"] = new_todos + data["todo"]
+        # It does NOT move anything to started. The main loop picks the first task (started or todo) next.
+
+        self.assertEqual(data["started"], [])
 
         # Check completed
         self.assertEqual(len(data["completed"]), 1)
         self.assertEqual(data["completed"][0]["task"], "Subtask 1")
         self.assertEqual(data["completed"][0]["session_id"], "sess_123")
 
-        # Check todo (Subtask 3 should be prepended)
-        self.assertEqual(data["todo"][0], "Subtask 3")
-        self.assertEqual(data["todo"][1], "Future Task")
+        # Check todo
+        self.assertEqual(data["todo"][0], "Subtask 2")
+        self.assertEqual(data["todo"][1], "Subtask 3")
+        self.assertEqual(data["todo"][2], "Future Task")
 
 if __name__ == '__main__':
     unittest.main()

@@ -263,6 +263,9 @@ def wait_for_session(client: JulesClient, session_name: str, timeout: int) -> Tu
                 if state == "COMPLETED":
                     print()
                     return True, "COMPLETED", session, session_name
+                if state == "PAUSED":
+                    print()
+                    return False, "PAUSED", session, session_name
                 if state == "FAILED":
                     print()
                     return False, "FAILED", session, session_name
@@ -763,6 +766,10 @@ def main() -> None:
                     # We continue the retry loop, but next time run_jules_task will skip this session
                     time.sleep(RETRY_DELAY_SEC)
                     continue
+
+                if not task_success and status == "PAUSED":
+                    logging.info(f"Session {short_id(session_id)} paused by user. Halting Verne.")
+                    sys.exit(0)
 
                 if task_success:
                     # NEW LOGIC: check for is_done (simple status) or completed items (split status)
