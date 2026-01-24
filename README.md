@@ -76,8 +76,12 @@ flowchart TD
 
     IncAttempts --> Execution[[2. Execute Task]]
 
-    Execution -->|SUCCESS| ResultProcessing[[3. Process Task Result]]
+    Execution -->|SUCCESS| CheckSyntax{Valid Syntax?}
+    CheckSyntax -- Yes --> ResultProcessing[[3. Process Task Result]]
     ResultProcessing --> HasTasks
+
+    CheckSyntax -- No --> SetFeedback[Set Feedback]
+    SetFeedback --> CheckRetry
 
     Execution -- FAIL/ERROR --> CheckRetry{attempts < 3?}
     Execution -- STALE --> RecordReject[Record rejected session in PLAN.yaml]

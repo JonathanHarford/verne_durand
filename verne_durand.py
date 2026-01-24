@@ -381,7 +381,8 @@ def run_jules_task(
     timeout: int,
     work_branch: str,
     plan_path: str,
-    rejected_session_ids: List[str] = None
+    rejected_session_ids: List[str] = None,
+    feedback: Optional[str] = None
 ) -> Tuple[bool, Dict[str, Any], str, str, str]:
     repo_slug = get_repo_slug()
     if not repo_slug:
@@ -413,7 +414,12 @@ def run_jules_task(
             template_path = os.path.join(script_dir, "prompt_template.txt")
             with open(template_path, "r") as f:
                 template = f.read().strip()
-            full_prompt = template.format(task=task, plan_path=plan_path)
+
+            full_task = task
+            if feedback:
+                full_task += f"\n\nCorrection Feedback:\n{feedback}"
+
+            full_prompt = template.format(task=full_task, plan_path=plan_path)
         except Exception as e:
             logging.error(f"Failed to load prompt template: {e}")
             return False, {}, "", "PROMPT_LOAD_FAILED", ""
@@ -614,6 +620,7 @@ def parse_jules_response(text: str) -> Dict[str, Any]:
     Returns a dict with keys: is_done, completed (list), next (str), todo (list).
     """
     result = {
+        "found_block": False,
         "is_done": False,
         "completed": [],
         "next": None,
@@ -632,6 +639,7 @@ def parse_jules_response(text: str) -> Dict[str, Any]:
         line = line.strip()
         if line.upper() == "[STATUS]":
             in_status_block = True
+            result["found_block"] = True
             continue
 
         if in_status_block:
@@ -750,13 +758,14 @@ def main() -> None:
             
             attempts = 0
             success = False
+            feedback = None
             while attempts < MAX_RETRIES and not success:
                 attempts += 1
                 plan_data = manager.load()
                 rejected_ids = [r.get("session_id") for r in plan_data.get("rejected", []) if isinstance(r, dict)]
                 
                 task_success, parsed_resp, session_id, status, commit_hash = run_jules_task(
-                    client, task_name, ".", args.timeout, target_branch, args.plan, rejected_ids
+                    client, task_name, ".", args.timeout, target_branch, args.plan, rejected_ids, feedback
                 )
                 
                 if not task_success and status == "STALE":
@@ -772,6 +781,17 @@ def main() -> None:
                     sys.exit(0)
 
                 if task_success:
+                    # STRICT SYNTAX CHECK
+                    if not parsed_resp.get("found_block"):
+                        logging.warning("Jules completed task but missed [STATUS] block. Retrying with feedback.")
+                        feedback = "You finished the session, but you FORGOT to include the [STATUS] block in the PR description. Please provide the [STATUS] block now. (You can create an empty commit if needed, or just ensure the PR description is correct)."
+                        success = False
+                        time.sleep(RETRY_DELAY_SEC)
+                        continue
+
+                    # Reset feedback on success
+                    feedback = None
+
                     # NEW LOGIC: check for is_done (simple status) or completed items (split status)
                     if parsed_resp.get("is_done") and not parsed_resp.get("completed"):
                         # Simple completion
